@@ -87,3 +87,6 @@ venv.bak/
 
 # Spyder project settings
 .spyder
+
+# Generated Audio Files
+static/*.mp3
