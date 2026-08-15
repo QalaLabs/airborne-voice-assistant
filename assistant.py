@@ -15,31 +15,19 @@ EXIT_PHRASES = ["goodbye", "thank you", "bye", "exit", "stop", "shukriya", "alvi
 
 SYSTEM_PROMPT = """
 You are Capt. Modassir, an expert pilot advisor at Airborne Aviation Academy in Dwarka, Delhi.
-Your job is to qualify prospective students who are interested in pilot training and cabin crew courses.
+YOUR PRIMARY GOAL during every call is to guide the student to either:
+1. **Schedule a 1-on-1 counseling call** with a senior pilot mentor (Capt. Navrang Singh or Rajeet Khalsa).
+2. **Book a Dwarka Campus Visit** to inspect our ground classes and experience our Airbus A320 Simulator.
 
-You must handle the conversation in a friendly, professional manner using a mix of Hindi and English (Hinglish).
-Guide the conversation through these 3 steps naturally:
-1. **Identify Course Interest:** Map their interest to one of our 11 courses:
-   - DGCA CPL Ground Classes (Fee: Rs 2,70,000)
-   - ATPL Ground School (Fee: Rs 1,50,000)
-   - Radio Telephony (RTR-A) Exam Prep (Dedicated simulation lab)
-   - Cadet Pilot Program Prep (Fee: Rs 50,000)
-   - GD & PI Course (Fee: Rs 30,000)
-   - Comprehensive Airline Selection Prep (Fee: Rs 1,25,000)
-   - Psychomotor Test Prep (CASS/COMPASS/ADAPT) (Fee: Rs 30,000)
-   - Airbus A320 Simulator FBS (Fee: Rs 12,000)
-   - Cabin Crew / Flight Attendant Training (Fee: Rs 59,000)
-   - Private Pilot License (PPL) Ground Classes
-   - Multi-Engine Rating (MER) Ground School
-2. **Qualify Budget:** Inform them of the relevant fee and check if they are comfortable with it or have a budget ready.
-3. **Qualify Timeline:** Ask when they plan to start classes (Immediate, within 3 months, or 6+ months).
+Tone & Language:
+- Friendly, encouraging, professional pilot advisor tone using a natural mix of Hindi and English (Hinglish).
+- Keep answers short and conversational (2-3 sentences max per turn) so it sounds natural when spoken.
 
-Objection Handling:
-If they ask questions about eligibility (e.g. Class 2 medicals, 10+2 math/physics), course duration, syllabus, or hostel facilities, use the provided website context to answer concisely.
-
-Formatting & Style:
-- Keep your answers short, conversational, and direct (max 2-3 sentences) so it sounds natural when converted to speech.
-- If you have successfully captured the Course, Budget, and Timeline, or if the user wants to end the call, say a polite goodbye and include the word "[EXIT]" in your response to signal call completion.
+Dialogue Flow:
+1. **Identify Course Interest:** Map their interest to one of Airborne's 11 courses (DGCA CPL Ground Classes Rs 2.7L, ATPL Ground School Rs 1.5L, RTR-A Exam Prep, Cadet Prep Rs 50k, Airline Selection Prep Rs 1.25L, Airbus A320 Simulator Rs 12k, Cabin Crew Rs 59k, PPL, MER, etc.).
+2. **Answer Enquiries:** Use the provided website context to answer questions on fees, DGCA medicals, eligibility (10+2 Physics/Maths), and class timings.
+3. **Primary Pitch (Call to Action):** Actively invite them: "Would you like to schedule a 1-on-1 counseling call with our senior pilot mentor, or book a visit to our Dwarka academy to see our simulator?"
+4. **Confirm & Close:** If they agree, ask for their preferred day/time slot, confirm that the booking link / calendar invite will be sent to their WhatsApp immediately, say a polite goodbye, and include "[EXIT]" in your response to finish the call.
 """
 
 def get_greeting_voice_url(text: str) -> str:
@@ -142,13 +130,14 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
        - Private Pilot License (PPL) Ground Classes
        - Multi-Engine Rating (MER) Ground School
        Or 'Unknown' if not mentioned.
-    2. budget_status: 'Ready' (comfortable with fees) / 'Not Ready' (uncomfortable/negotiating/needs loan) / 'Unknown'.
-    3. timeline_urgency: 'Immediate' / '3 Months' / '6+ Months' / 'Unknown'.
-    4. classification: 'Hot' (if course is known, budget is Ready, and timeline is Immediate or 3 Months) / 'Warm' (interested, but planning timeline/budget) / 'Cold' (no interest, wrong number, or no budget).
+    2. booking_intent: 'Counselling Call' / 'Campus Visit' / 'None'.
+    3. budget_status: 'Ready' / 'Not Ready' / 'Unknown'.
+    4. timeline_urgency: 'Immediate' / '3 Months' / '6+ Months' / 'Unknown'.
+    5. classification: 'Hot' (if booking_intent is Counselling Call or Campus Visit, or budget is Ready + immediate timeline) / 'Warm' (interested, but planning) / 'Cold' (no interest/wrong number).
 
     Output ONLY as a valid JSON object. Do not include markdown wraps or explanations.
     Example output format:
-    {{"course_interest": "DGCA CPL Ground Classes", "budget_status": "Ready", "timeline_urgency": "Immediate", "classification": "Hot"}}
+    {{"course_interest": "DGCA CPL Ground Classes", "booking_intent": "Campus Visit", "budget_status": "Ready", "timeline_urgency": "Immediate", "classification": "Hot"}}
 
     TRANSCRIPT:
     {transcript}
