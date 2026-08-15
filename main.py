@@ -30,11 +30,17 @@ async def new_lead_webhook(request: Request):
     Ingests the lead into Supabase and schedules an outbound call.
     """
     try:
-        data = await request.json()
-        name = data.get("name", "New Lead")
-        phone = data.get("phone")
-        email = data.get("email")
-        course = data.get("course")
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            data = await request.json()
+        else:
+            form_data = await request.form()
+            data = dict(form_data)
+            
+        name = data.get("name") or data.get("Name") or "New Lead"
+        phone = data.get("phone") or data.get("Phone") or data.get("mobile")
+        email = data.get("email") or data.get("Email")
+        course = data.get("course") or data.get("Course")
         
         if not phone:
             return {"status": "error", "message": "Phone number is required."}
