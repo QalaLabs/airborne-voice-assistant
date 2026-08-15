@@ -3,27 +3,58 @@ import config
 
 def send_whatsapp_message(phone: str, message: str) -> bool:
     """
-    Helper to send a WhatsApp message using configured provider (e.g. Twilio WhatsApp or Custom API).
+    Helper to send a WhatsApp message using configured provider:
+    - Meta WhatsApp Business Cloud API (if WHATSAPP_PHONE_NUMBER_ID is set)
+    - Custom Webhook API (if WHATSAPP_API_URL is set)
+    - Mock fallback log
     """
-    if not config.WHATSAPP_API_URL or not config.WHATSAPP_API_KEY:
-        print(f"WhatsApp Automation (Mock): Sending message to {phone}: '{message}'")
-        return True
-
-    headers = {
-        "Authorization": f"Bearer {config.WHATSAPP_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "to": phone,
-        "message": message
-    }
+    clean_phone = phone.replace("+", "").replace(" ", "").replace("-", "")
     
-    try:
-        response = requests.post(config.WHATSAPP_API_URL, json=payload, headers=headers)
-        return response.status_code in [200, 201]
-    except Exception as e:
-        print(f"WhatsApp Automation Error: {e}")
-        return False
+    # 1. Meta WhatsApp Business Cloud API Integration
+    if config.WHATSAPP_PHONE_NUMBER_ID and config.WHATSAPP_API_KEY:
+        url = f"https://graph.facebook.com/v18.0/{config.WHATSAPP_PHONE_NUMBER_ID}/messages"
+        headers = {
+            "Authorization": f"Bearer {config.WHATSAPP_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": clean_phone,
+            "type": "text",
+            "text": {
+                "body": message
+            }
+        }
+        try:
+            resp = requests.post(url, json=payload, headers=headers)
+            if resp.status_code in [200, 201]:
+                print(f"WhatsApp Cloud API: Successfully sent message to {clean_phone}.")
+                return True
+            else:
+                print(f"WhatsApp Cloud API Error: {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"WhatsApp Cloud API Exception: {e}")
+
+    # 2. Generic Webhook / Third Party API
+    if config.WHATSAPP_API_URL and config.WHATSAPP_API_KEY:
+        headers = {
+            "Authorization": f"Bearer {config.WHATSAPP_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "to": phone,
+            "message": message
+        }
+        try:
+            response = requests.post(config.WHATSAPP_API_URL, json=payload, headers=headers)
+            return response.status_code in [200, 201]
+        except Exception as e:
+            print(f"WhatsApp Custom API Error: {e}")
+            return False
+
+    # 3. Fallback / Mock Mode
+    print(f"WhatsApp Automation (Mock): Message to {phone}: '{message}'")
+    return True
 
 def trigger_post_call_automations(phone: str, classification: str, lead_name: str = "Future Pilot"):
     """
