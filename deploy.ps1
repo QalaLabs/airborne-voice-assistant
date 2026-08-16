@@ -23,9 +23,10 @@ gcloud run deploy $ServiceName `
     --region $Region `
     --platform managed `
     --allow-unauthenticated `
-    --port 8000 `
     --memory 1Gi `
-    --cpu 1
+    --cpu 1 `
+    --min-instances 1 `
+    --no-cpu-throttling
 
 # 3. Retrieve live service URL
 $ServiceUrl = (gcloud run services describe $ServiceName --platform managed --region $Region --format 'value(status.url)').Trim()

@@ -24,9 +24,10 @@ gcloud run deploy $SERVICE_NAME \
     --region $REGION \
     --platform managed \
     --allow-unauthenticated \
-    --port 8000 \
     --memory 1Gi \
-    --cpu 1
+    --cpu 1 \
+    --min-instances 1 \
+    --no-cpu-throttling
 
 # 3. Retrieve live service URL
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --platform managed --region $REGION --format 'value(status.url)')

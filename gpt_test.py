@@ -67,7 +67,7 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "")
     try:
         text = res_data['candidates'][0]['content']['parts'][0]['text']
         return text
-    except (KeyError, IndexOffError, TypeError) as e:
+    except (KeyError, IndexError, TypeError) as e:
         print(f"Gemini Response Parsing Error: {e}, Response Body: {res_data}")
         raise e
 

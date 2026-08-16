@@ -57,7 +57,8 @@ class TestAirborneAssistantFlow(unittest.TestCase):
         )
         self.assertIsNotNone(job_id)
         # Clean up job
-        scheduler.scheduler.remove_job(job_id)
+        if scheduler.scheduler:
+            scheduler.scheduler.remove_job(job_id)
 
 if __name__ == "__main__":
     unittest.main()

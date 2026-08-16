@@ -1,5 +1,9 @@
 import config
-from twilio.rest import Client
+
+try:
+    from twilio.rest import Client
+except ImportError:
+    Client = None
 
 def make_outbound_call(phone_number: str, lead_name: str) -> bool:
     """
@@ -15,8 +19,8 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
             
     print(f"Telephony: Initiating outbound call to {lead_name} at {phone_number}...")
     
-    # Check if Twilio API keys are configured
-    if config.TWILIO_ACCOUNT_SID and config.TWILIO_AUTH_TOKEN:
+    # Check if Twilio API keys are configured and Client is available
+    if config.TWILIO_ACCOUNT_SID and config.TWILIO_AUTH_TOKEN and Client:
         try:
             client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
             

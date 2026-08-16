@@ -6,9 +6,9 @@ load_dotenv()
 
 # App Settings
 APP_HOST = os.environ.get("APP_HOST", "0.0.0.0")
-APP_PORT = int(os.environ.get("APP_PORT", 8000))
-# NGROK or Cloud Run Public Service URL
-NGROK_URL = os.environ.get("NGROK_URL", os.environ.get("APP_URL", ""))
+APP_PORT = int(os.environ.get("PORT", os.environ.get("APP_PORT", 8000)))
+# Cloud Run Public Service URL or NGROK fallback
+NGROK_URL = os.environ.get("APP_URL", os.environ.get("NGROK_URL", ""))
 
 # OpenAI Settings
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

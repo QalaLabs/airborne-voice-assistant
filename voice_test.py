@@ -1,5 +1,8 @@
 import requests
-import speech_recognition as sr
+try:
+    import speech_recognition as sr
+except ImportError:
+    sr = None
 import os, tempfile
 import config
 
@@ -34,7 +37,9 @@ def listen(recording_url):
     
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
         tmp_file.write(response.content)
-        tmp_file_path = tmp_file.name
+    if not sr:
+        print("STT: SpeechRecognition library not available.")
+        return ""
 
     recognizer = sr.Recognizer()
     try:

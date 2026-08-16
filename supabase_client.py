@@ -1,15 +1,23 @@
-from supabase import create_client, Client
+try:
+    from supabase import create_client, Client
+except ImportError:
+    create_client = None
+    Client = None
+
 import config
 
-supabase: Client = None
+supabase = None
 
-if config.SUPABASE_URL and config.SUPABASE_KEY:
+if config.SUPABASE_URL and config.SUPABASE_KEY and create_client:
     try:
         supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
     except Exception as e:
         print(f"Failed to initialize Supabase client: {e}")
 else:
-    print("Warning: SUPABASE_URL and SUPABASE_KEY are not configured.")
+    if not create_client:
+        print("Notice: 'supabase' package not installed in environment. Operating in mock mode.")
+    else:
+        print("Warning: SUPABASE_URL and SUPABASE_KEY are not configured.")
 
 def get_supabase_client():
     return supabase
