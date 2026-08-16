@@ -16,11 +16,14 @@ app = FastAPI(title="Airborne Aviation AI Voice Assistant")
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+import database
+
 @app.on_event("startup")
 def startup_event():
     """
-    Starts background services on application startup.
+    Starts background services and initializes PostgreSQL database schema on startup.
     """
+    database.init_db()
     scheduler.init_scheduler()
 
 @app.post("/webhooks/new-lead")
