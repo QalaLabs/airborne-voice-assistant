@@ -138,5 +138,123 @@ async def process_recording(
         
     return str(resp)
 
+# ==========================================
+# TeleCMI Voice API & SIP Trunk Endpoints
+# ==========================================
+
+@app.api_route("/telecmi/answer", methods=["GET", "POST"])
+async def telecmi_answer(request: Request):
+    """
+    TeleCMI PIOPIY Answer URL Webhook.
+    Called when an inbound call arrives on TeleCMI or an outbound call is answered.
+    Returns PCMO (PIOPIY Call Management Object) JSON instructions.
+    """
+    try:
+        # Extract parameters from query params, json, or form data
+        query_params = dict(request.query_params)
+        body_data = {}
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                body_data = await request.json()
+            except Exception:
+                pass
+        elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            try:
+                form = await request.form()
+                body_data = dict(form)
+            except Exception:
+                pass
+
+        data = {**query_params, **body_data}
+        print(f"TeleCMI Answer Webhook Received: {data}")
+
+        caller_phone = (
+            data.get("phone") or 
+            data.get("from") or 
+            data.get("From") or 
+            data.get("caller_id") or 
+            ""
+        )
+        direction = data.get("direction", "inbound")
+
+        # Format caller phone
+        if caller_phone and not str(caller_phone).startswith("+"):
+            caller_phone = "+" + str(caller_phone)
+
+        # Check lead in Supabase
+        lead_name = "Future Pilot"
+        if caller_phone:
+            lead = supabase_client.get_lead_by_phone(caller_phone)
+            if lead:
+                lead_name = lead.get("name", "Future Pilot")
+            elif direction == "inbound":
+                supabase_client.save_lead(name="TeleCMI Inbound Lead", phone=caller_phone, status="Cold")
+
+        # Generate custom greeting audio
+        if direction == "outbound":
+            greeting_text = f"Hello {lead_name}! I am Modassir from Airborne Aviation Academy. I noticed you submitted an interest in our pilot training courses. How can I help you today?"
+        else:
+            greeting_text = f"Welcome to Airborne Aviation Academy Dwarka. I am your AI pilot advisor. How can I help you regarding our flight programs today?"
+
+        greeting_url = get_greeting_voice_url(greeting_text)
+
+        # PCMO response for TeleCMI / PIOPIY
+        pcmo_response = [
+            {
+                "action": "play",
+                "file_name": greeting_url
+            }
+        ]
+        return pcmo_response
+    except Exception as e:
+        print(f"TeleCMI Answer Error: {e}")
+        return [{"action": "play", "file_name": get_greeting_voice_url("Welcome to Airborne Aviation Academy.")}]
+
+@app.api_route("/telecmi/events", methods=["GET", "POST"])
+@app.api_route("/telecmi/debug", methods=["GET", "POST"])
+async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
+    """
+    TeleCMI Debug / Event URL Webhook.
+    Receives real-time call lifecycle events (ringing, answered, hangup, CDR).
+    Triggers post-call processing on call completion.
+    """
+    try:
+        query_params = dict(request.query_params)
+        body_data = {}
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                body_data = await request.json()
+            except Exception:
+                pass
+        elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            try:
+                form = await request.form()
+                body_data = dict(form)
+            except Exception:
+                pass
+
+        data = {**query_params, **body_data}
+        print(f"[TeleCMI Debug / Event Log]: {data}")
+
+        status = (data.get("status") or data.get("event") or "").lower()
+        caller_phone = str(data.get("from") or data.get("phone") or "")
+        direction = data.get("direction", "inbound")
+        recording_url = data.get("record_url") or data.get("recording_url") or ""
+
+        if caller_phone and not caller_phone.startswith("+"):
+            caller_phone = "+" + caller_phone
+
+        # If call ended, execute post-call CRM & WhatsApp pipeline
+        if status in ["completed", "hangup", "end", "terminated"] and caller_phone:
+            background_tasks.add_task(run_post_call_pipeline, caller_phone, direction, recording_url)
+
+        return {"status": "success", "event_received": True, "event_type": status or "logged"}
+    except Exception as e:
+        print(f"TeleCMI Event Error: {e}")
+        return {"status": "error", "message": str(e)}
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

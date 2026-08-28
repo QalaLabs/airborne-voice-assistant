@@ -1,3 +1,4 @@
+import requests
 import config
 
 try:
@@ -7,39 +8,75 @@ except ImportError:
 
 def make_outbound_call(phone_number: str, lead_name: str) -> bool:
     """
-    Triggers an outbound call using the configured telephony API.
-    Bridges the call to the FastAPI '/answer-call' or '/stream-call' endpoints.
+    Triggers an outbound call using TeleCMI (primary) or Twilio (fallback).
+    Bridges the call to the FastAPI '/telecmi/answer' or '/answer-call' endpoints.
     """
     # Normalize phone number (ensure country code)
-    if not phone_number.startswith("+"):
-        if len(phone_number) == 10:
-            phone_number = "+91" + phone_number # Default to India country code
-        else:
-            phone_number = "+" + phone_number
+    clean_digits = "".join(filter(str.isdigit, phone_number))
+    if len(clean_digits) == 10:
+        formatted_phone = "+91" + clean_digits
+        telecmi_to = "91" + clean_digits
+    elif clean_digits.startswith("91") and len(clean_digits) == 12:
+        formatted_phone = "+" + clean_digits
+        telecmi_to = clean_digits
+    else:
+        formatted_phone = "+" + clean_digits if not phone_number.startswith("+") else phone_number
+        telecmi_to = clean_digits
             
-    print(f"Telephony: Initiating outbound call to {lead_name} at {phone_number}...")
+    print(f"Telephony: Initiating outbound call to {lead_name} at {formatted_phone}...")
     
-    # Check if Twilio API keys are configured and Client is available
+    # 1. Check if TeleCMI API is configured
+    if config.TELECMI_APP_ID and config.TELECMI_APP_SECRET:
+        try:
+            answer_url = f"{config.NGROK_URL}/telecmi/answer?direction=outbound&phone={formatted_phone}"
+            telecmi_api_url = "https://rest.telecmi.com/v2/make_call"
+            
+            headers = {
+                "Content-Type": "application/json"
+            }
+            if config.TELECMI_TOKEN:
+                headers["Authorization"] = f"Bearer {config.TELECMI_TOKEN}"
+                headers["token"] = config.TELECMI_TOKEN
+            
+            payload = {
+                "appid": config.TELECMI_APP_ID,
+                "secret": config.TELECMI_APP_SECRET,
+                "from": config.TELECMI_PHONE_NUMBER or config.TELECMI_SIP_USER or "airborneaviation",
+                "to": telecmi_to,
+                "answer_url": answer_url
+            }
+            
+            print(f"Telephony: Dispatching TeleCMI API call for {formatted_phone} (Answer URL: {answer_url})...")
+            response = requests.post(telecmi_api_url, json=payload, headers=headers, timeout=10)
+
+            
+            if response.status_code in [200, 201]:
+                print(f"Telephony: TeleCMI call initiated successfully: {response.text}")
+                return True
+            else:
+                print(f"Telephony: TeleCMI returned HTTP {response.status_code}: {response.text}")
+        except Exception as e:
+            print(f"Telephony Error: TeleCMI dispatch error: {e}")
+
+    # 2. Fallback to Twilio if configured
     if config.TWILIO_ACCOUNT_SID and config.TWILIO_AUTH_TOKEN and Client:
         try:
             client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
-            
-            # The TwiML URL that tells Twilio how to handle the call once answered.
-            # We redirect it to our FastAPI app's NGROK URL.
-            twiml_url = f"{config.NGROK_URL}/answer-call?direction=outbound&phone={phone_number}"
+            twiml_url = f"{config.NGROK_URL}/answer-call?direction=outbound&phone={formatted_phone}"
             
             call = client.calls.create(
-                to=phone_number,
+                to=formatted_phone,
                 from_=config.TWILIO_PHONE_NUMBER,
                 url=twiml_url
             )
-            print(f"Telephony: Call created successfully. SID: {call.sid}")
+            print(f"Telephony: Twilio call created successfully. SID: {call.sid}")
             return True
         except Exception as e:
             print(f"Telephony Error: Failed to create Twilio call: {e}")
             return False
-    else:
-        # Standalone mock implementation when credentials are not present
-        print("Telephony (Mock Mode): Twilio keys not configured. Simulating successful outbound SIP connection.")
-        print(f"Telephony (Mock Mode): Routing call to webhook: {config.NGROK_URL}/answer-call?direction=outbound&phone={phone_number}")
-        return True
+
+    # 3. Standalone simulation / mock
+    print("Telephony (Simulation Mode): Dispatched outbound call signal.")
+    print(f"Telephony (Simulation Mode): Route: {config.NGROK_URL}/telecmi/answer?direction=outbound&phone={formatted_phone}")
+    return True
+

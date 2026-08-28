@@ -21,11 +21,12 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "")
     Integrates with Google Gemini API via REST requests to process conversations.
     This avoids dependencies on external SDK packages.
     """
-    model = config.GEMINI_MODEL or "gemini-2.0-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={config.GEMINI_API_KEY}"
+    model = config.GEMINI_MODEL or "gemini-flash-latest"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     
     headers = {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-goog-api-key": config.GEMINI_API_KEY
     }
     
     # Translate history messages to Gemini format: role 'user' or 'model'

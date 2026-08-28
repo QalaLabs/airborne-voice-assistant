@@ -31,14 +31,36 @@ def speak_and_get_url(text: str) -> str:
                 f.write(resp.content)
             return f"{config.NGROK_URL}/static/{fname}"
         except Exception as e:
-            print(f"TTS Error: ElevenLabs failed ({e}). Falling back to dummy voice file.")
+            print(f"TTS Error: ElevenLabs failed ({e}). Falling back to free Indian neural voice.")
             
-    # Fallback / Mock audio response
-    # We will copy a placeholder file or write a tiny silence/beep WAV file to avoid crashes
+    # Free Indian Neural Voice via edge-tts
     try:
-        # Create a tiny 1-second silent MP3/WAV file if none exists
+        import asyncio
+        import edge_tts
+        indian_voice = getattr(config, "TTS_VOICE", "en-IN-PrabhatNeural")
+        
+        async def _synthesize():
+            communicate = edge_tts.Communicate(text, indian_voice)
+            await communicate.save(path)
+            
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    pool.submit(lambda: asyncio.run(_synthesize())).result()
+            else:
+                loop.run_until_complete(_synthesize())
+        except RuntimeError:
+            asyncio.run(_synthesize())
+            
+        return f"{config.NGROK_URL}/static/{fname}"
+    except Exception as e:
+        print(f"TTS Error (edge-tts): {e}")
+
+    # Fallback / Mock audio response
+    try:
         with open(path, "wb") as f:
-            # Writing some dummy data to mock a voice file
             f.write(b"\x00" * 500)
         return f"{config.NGROK_URL}/static/{fname}"
     except Exception as e:
