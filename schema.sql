@@ -27,6 +27,16 @@ CREATE TABLE IF NOT EXISTS calls (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Table to store in-progress call conversation state.
+-- Cloud Run can route a call's turns to different instances or recycle an
+-- idle instance mid-call, so this cannot live in process memory.
+CREATE TABLE IF NOT EXISTS conversation_sessions (
+    phone VARCHAR(50) PRIMARY KEY,
+    direction VARCHAR(20),
+    history JSONB NOT NULL DEFAULT '[]'::jsonb,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Table to store scraped website text embeddings (1536 dimensions for OpenAI)
 CREATE TABLE IF NOT EXISTS documents (
     id BIGSERIAL PRIMARY KEY,

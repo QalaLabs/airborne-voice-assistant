@@ -8,9 +8,6 @@ import supabase_client
 import crm_sync
 import automation
 
-# Memory store for conversation history: phone -> list of messages
-histories = {}
-
 EXIT_PHRASES = ["goodbye", "thank you", "bye", "exit", "stop", "shukriya", "alvida"]
 
 SYSTEM_PROMPT = """
@@ -45,18 +42,18 @@ def handle_conversation(recording_url: str, phone: str, direction: str):
     """
     caller_input = listen(recording_url)
     print(f"Conversation: Phone={phone}, Input='{caller_input}'")
-    
-    # Initialize history for this phone if not exists
-    if phone not in histories:
-        histories[phone] = []
-        
-    history = histories[phone]
-    
+
+    # Load history from PostgreSQL rather than process memory: Cloud Run may
+    # route this call's turns to a different instance, or recycle this one,
+    # between requests.
+    history = supabase_client.get_conversation_history(phone)
+
     if not caller_input or "could not understand" in caller_input.lower():
         # Fallback greeting if no input detected
         response_text = "I couldn't hear you clearly. Could you please repeat that? (Aapki aawaz clear nahi thi. Kya aap dohara sakte hain?)"
         history.append({"role": "user", "content": "[Silence/Unrecognized Input]"})
         history.append({"role": "assistant", "content": response_text})
+        supabase_client.save_conversation_history(phone, history, direction)
         return speak_and_get_url(response_text), False
 
     # Check for direct exit phrases
@@ -65,33 +62,35 @@ def handle_conversation(recording_url: str, phone: str, direction: str):
             response_text = "Thank you for calling Airborne Aviation Academy. Have a great day ahead! Goodbye."
             history.append({"role": "user", "content": caller_input})
             history.append({"role": "assistant", "content": response_text + " [EXIT]"})
+            supabase_client.save_conversation_history(phone, history, direction)
             return speak_and_get_url(response_text), True
 
     # Retrieve RAG context from the website database
     context = rag.query_rag(caller_input)
-    
+
     # Dynamic system prompt with context
     dynamic_system_prompt = f"{SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{context}"
-    
+
     # Chat with GPT
     ai_response = chat_with_gpt(caller_input, history, dynamic_system_prompt)
     print(f"AI Response: '{ai_response}'")
-    
-    # Append to memory
+
+    # Append to conversation state
     history.append({"role": "user", "content": caller_input})
     history.append({"role": "assistant", "content": ai_response})
-    
+
     # Detect exit signal in response
     should_hang_up = "[EXIT]" in ai_response
     clean_response = ai_response.replace("[EXIT]", "").strip()
-    
+
+    supabase_client.save_conversation_history(phone, history, direction)
     return speak_and_get_url(clean_response), should_hang_up
 
 def get_transcript_string(phone: str) -> str:
     """
     Compiles the conversation history for a given phone number into a formatted text log.
     """
-    history = histories.get(phone, [])
+    history = supabase_client.get_conversation_history(phone)
     log_lines = []
     for msg in history:
         role = "Lead" if msg["role"] == "user" else "AI"
@@ -100,10 +99,9 @@ def get_transcript_string(phone: str) -> str:
 
 def clear_session(phone: str):
     """
-    Clears the session memory after post-call actions are triggered.
+    Clears the persisted conversation session after post-call actions are triggered.
     """
-    if phone in histories:
-        del histories[phone]
+    supabase_client.clear_conversation_history(phone)
 
 def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
     """

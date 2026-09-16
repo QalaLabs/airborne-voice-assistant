@@ -34,10 +34,10 @@ def run_simulated_call_interactive(phone="+919876543210", lead_name="Aarav Sharm
         greeting_text = "Welcome to Airborne Aviation Academy Dwarka. I am your AI pilot advisor. How can I help you regarding our flight programs today?"
         
     print(f"\n[AI Assistant (Modassir)]:\n\"{greeting_text}\"")
-    
-    assistant.histories[phone] = []
-    assistant.histories[phone].append({"role": "assistant", "content": greeting_text})
-    
+
+    history = [{"role": "assistant", "content": greeting_text}]
+    supabase_client.save_conversation_history(phone, history, direction)
+
     turn = 1
     while True:
         print(f"\n--- Turn {turn} ---")
@@ -47,29 +47,31 @@ def run_simulated_call_interactive(phone="+919876543210", lead_name="Aarav Sharm
             break
         if not user_input:
             continue
-            
+
         if any(w in user_input.lower() for w in assistant.EXIT_PHRASES):
             farewell = "Thank you for calling Airborne Aviation Academy. Have a great day ahead! Clear skies! [EXIT]"
             print(f"\n[AI Assistant (Modassir)]:\n\"{farewell.replace('[EXIT]', '').strip()}\"")
-            assistant.histories[phone].append({"role": "user", "content": user_input})
-            assistant.histories[phone].append({"role": "assistant", "content": farewell})
+            history.append({"role": "user", "content": user_input})
+            history.append({"role": "assistant", "content": farewell})
+            supabase_client.save_conversation_history(phone, history, direction)
             break
-            
+
         rag_context = rag.query_rag(user_input)
         print(f"\n[System - RAG Context Retrieved ({len(rag_context)} chars)]:\n{rag_context[:250]}...")
-        
+
         dynamic_prompt = f"{assistant.SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{rag_context}"
-        ai_response = chat_with_gpt(user_input, assistant.histories[phone], dynamic_prompt)
-        
+        ai_response = chat_with_gpt(user_input, history, dynamic_prompt)
+
         print(f"\n[AI Assistant (Modassir)]:\n\"{ai_response.replace('[EXIT]', '').strip()}\"")
-        
-        assistant.histories[phone].append({"role": "user", "content": user_input})
-        assistant.histories[phone].append({"role": "assistant", "content": ai_response})
-        
+
+        history.append({"role": "user", "content": user_input})
+        history.append({"role": "assistant", "content": ai_response})
+        supabase_client.save_conversation_history(phone, history, direction)
+
         if "[EXIT]" in ai_response:
             print("\n[Call Ended by Assistant]")
             break
-            
+
         turn += 1
 
     print("\n" + "=" * 65)
@@ -90,9 +92,9 @@ def run_automated_demo_call(phone="+919876543210", lead_name="Rohan Verma", dire
         greeting_text = "Welcome to Airborne Aviation Academy Dwarka. I am your AI pilot advisor. How can I help you regarding our flight programs today?"
         
     print(f"\n[AI Assistant (Modassir)]:\n\"{greeting_text}\"")
-    
-    assistant.histories[phone] = []
-    assistant.histories[phone].append({"role": "assistant", "content": greeting_text})
+
+    history = [{"role": "assistant", "content": greeting_text}]
+    supabase_client.save_conversation_history(phone, history, direction)
 
     dialogue_script = [
         "Hi Modassir sir, I want to know about DGCA CPL Ground Classes fees and duration.",
@@ -103,21 +105,23 @@ def run_automated_demo_call(phone="+919876543210", lead_name="Rohan Verma", dire
     for turn_idx, user_speech in enumerate(dialogue_script, 1):
         print(f"\n--- Turn {turn_idx} ---")
         print(f"Lead ({lead_name}): \"{user_speech}\"")
-        
+
         if any(w in user_speech.lower() for w in assistant.EXIT_PHRASES):
             farewell = "Thank you for calling Airborne Aviation Academy. Your Saturday 11 AM campus visit is noted. Have a great day ahead! Clear skies! [EXIT]"
             print(f"AI Assistant (Modassir): \"{farewell.replace('[EXIT]', '').strip()}\"")
-            assistant.histories[phone].append({"role": "user", "content": user_speech})
-            assistant.histories[phone].append({"role": "assistant", "content": farewell})
+            history.append({"role": "user", "content": user_speech})
+            history.append({"role": "assistant", "content": farewell})
+            supabase_client.save_conversation_history(phone, history, direction)
             break
 
         rag_context = rag.query_rag(user_speech)
         dynamic_prompt = f"{assistant.SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{rag_context}"
-        ai_response = chat_with_gpt(user_speech, assistant.histories[phone], dynamic_prompt)
-        
+        ai_response = chat_with_gpt(user_speech, history, dynamic_prompt)
+
         print(f"AI Assistant (Modassir): \"{ai_response.replace('[EXIT]', '').strip()}\"")
-        assistant.histories[phone].append({"role": "user", "content": user_speech})
-        assistant.histories[phone].append({"role": "assistant", "content": ai_response})
+        history.append({"role": "user", "content": user_speech})
+        history.append({"role": "assistant", "content": ai_response})
+        supabase_client.save_conversation_history(phone, history, direction)
 
     print("\n" + "=" * 65)
     print("  TRIGGERING POST-CALL CRM & QUALIFICATION PIPELINE")

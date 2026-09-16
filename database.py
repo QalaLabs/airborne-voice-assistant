@@ -167,6 +167,72 @@ def save_call_log(phone: str, direction: str, duration: int, recording_url: str,
     finally:
         conn.close()
 
+# In-process fallback store, used only when DATABASE_URL is not configured
+# (e.g. local dev). Not safe across multiple Cloud Run instances.
+_mock_conversation_sessions = {}
+
+def get_conversation_history(phone: str) -> list:
+    """
+    Retrieves the in-progress call's conversation history for a phone number.
+    Backed by PostgreSQL so state survives across Cloud Run instances.
+    """
+    conn = get_connection()
+    if not conn:
+        return _mock_conversation_sessions.get(phone, [])
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT history FROM conversation_sessions WHERE phone = %s;", (phone,))
+            row = cur.fetchone()
+            return row["history"] if row and row["history"] else []
+    except Exception as e:
+        print(f"DB Error (get_conversation_history): {e}")
+        return []
+    finally:
+        conn.close()
+
+def save_conversation_history(phone: str, history: list, direction: str = None):
+    """
+    Persists the in-progress call's conversation history for a phone number.
+    """
+    conn = get_connection()
+    if not conn:
+        _mock_conversation_sessions[phone] = history
+        return
+
+    try:
+        history_json = json.dumps(history)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO conversation_sessions (phone, direction, history, updated_at)
+                VALUES (%s, %s, %s::jsonb, CURRENT_TIMESTAMP)
+                ON CONFLICT (phone) DO UPDATE
+                SET history = EXCLUDED.history,
+                    direction = COALESCE(EXCLUDED.direction, conversation_sessions.direction),
+                    updated_at = CURRENT_TIMESTAMP;
+            """, (phone, direction, history_json))
+    except Exception as e:
+        print(f"DB Error (save_conversation_history): {e}")
+    finally:
+        conn.close()
+
+def clear_conversation_history(phone: str):
+    """
+    Clears the conversation session once a call ends and post-call processing starts.
+    """
+    conn = get_connection()
+    if not conn:
+        _mock_conversation_sessions.pop(phone, None)
+        return
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM conversation_sessions WHERE phone = %s;", (phone,))
+    except Exception as e:
+        print(f"DB Error (clear_conversation_history): {e}")
+    finally:
+        conn.close()
+
 def insert_document(content: str, metadata: dict, embedding: list):
     """
     Inserts a text chunk and vector embedding into PostgreSQL documents table for RAG.

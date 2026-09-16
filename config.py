@@ -36,11 +36,11 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TELECRM_API_KEY = os.environ.get("TELECRM_API_KEY", "")
 
 # TeleCMI / PIOPIY Voice API & SIP Trunk
-TELECMI_APP_ID = os.environ.get("TELECMI_APP_ID", "6eaa00e8-10e8-4dd6-afb1-0a0e200d2b0b")
-TELECMI_APP_SECRET = os.environ.get("TELECMI_APP_SECRET", "e65072de-7571-4930-a51b-181fba552e7d")
-TELECMI_TOKEN = os.environ.get("TELECMI_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiIzYTNhNGM0ZC00OTUzLTRiYjEtOTg5MS0xMjhiNjlmY2FhOGYiLCJlbWFpbF9pZCI6ImFiQHFhbGFsYWJzLmNvbSIsImlhdCI6MTc4NzkxOTYwNn0.zwST5Rc3qgXioCj2xInm_Dql148Crfcs8ewX1XuQ0wI")
-TELECMI_SIP_USER = os.environ.get("TELECMI_SIP_USER", "airborneaviation")
-TELECMI_SIP_PASS = os.environ.get("TELECMI_SIP_PASS", "Qalalabs@212")
+TELECMI_APP_ID = os.environ.get("TELECMI_APP_ID", "")
+TELECMI_APP_SECRET = os.environ.get("TELECMI_APP_SECRET", "")
+TELECMI_TOKEN = os.environ.get("TELECMI_TOKEN", "")
+TELECMI_SIP_USER = os.environ.get("TELECMI_SIP_USER", "")
+TELECMI_SIP_PASS = os.environ.get("TELECMI_SIP_PASS", "")
 TELECMI_PHONE_NUMBER = os.environ.get("TELECMI_PHONE_NUMBER", "")
 
 
