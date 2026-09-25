@@ -9,12 +9,7 @@ except ImportError:
 try:
     import piopiy
 except ImportError:
-    try:
-        import sys
-        sys.path.append(r"C:\Users\aashi\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages")
-        import piopiy
-    except ImportError:
-        piopiy = None
+    piopiy = None
 
 def make_outbound_call(phone_number: str, lead_name: str) -> bool:
     """
@@ -40,7 +35,7 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
         try:
             client = piopiy.RestClient(token=config.TELECMI_TOKEN)
             caller_id = config.TELECMI_PHONE_NUMBER or "917943446755"
-            app_id = "e65072de-7571-4930-a51b-181fba552e7d"
+            app_id = config.TELECMI_PIOPIY_APP_ID
             
             # ElevenLabs AI Voice Audio for Capt. Modassir
             greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_modassir.mp3"

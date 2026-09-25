@@ -522,8 +522,8 @@ def record_call_outcome(
                         INSERT INTO {tbl} (lead_id, direction, duration, recording_url, transcript, summary)
                         VALUES (%s, %s, %s, %s, %s, %s);
                     """, (lead_id, direction, duration, recording_url, transcript, summary))
-                except Exception:
-                    pass
+                except Exception as tbl_err:
+                    print(f"DB Notice (record_call_outcome): failed to insert into '{tbl}': {tbl_err}")
 
         print(f"CRM Updated via Cloud SQL: lead={phone}, outcome={outcome}, status={new_status}, followUp={next_follow_up}")
     except Exception as e:
