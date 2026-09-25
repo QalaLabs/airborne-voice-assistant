@@ -392,8 +392,6 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
             "phone": phone,
             "course_interest": data["course_interest"],
             "classification": data["classification"],
-            "budget_status": data.get("budget_status"),
-            "timeline_urgency": data.get("timeline_urgency"),
             "recording_url": gcs_recording_url
         }
         crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
