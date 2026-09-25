@@ -103,6 +103,30 @@ def init_db():
                 schema_sql = f.read()
             with conn.cursor() as cur:
                 cur.execute(schema_sql)
+                # Safely ensure all columns exist if table was previously created with older schema
+                migration_sql = """
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "orgId" UUID;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "courseInterest" VARCHAR(255);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS course_interest VARCHAR(255);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS budget_status VARCHAR(255);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS timeline_urgency VARCHAR(255);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'NEW';
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS classification VARCHAR(50) DEFAULT 'Cold';
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'VOICE_AGENT';
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS city VARCHAR(100);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS state VARCHAR(100);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "customFields" JSONB DEFAULT '{}'::jsonb;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "lastActivityAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "nextFollowUp" TIMESTAMP WITH TIME ZONE;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+                    ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'ACTIVE';
+                """
+                try:
+                    cur.execute(migration_sql)
+                except Exception as me:
+                    print(f"Database Migration Notice: {me}")
             print("PostgreSQL Database Schema initialized successfully.")
             return True
     except Exception as e:
@@ -154,7 +178,7 @@ def get_lead_by_phone(phone: str):
         with conn.cursor() as cur:
             # 1. Search CRM leads table (Prisma schema)
             cur.execute("""
-                SELECT id, "orgId", name, phone, email, "courseInterest", status, "nextFollowUp", metadata
+                SELECT id, "orgId", name, phone, email, "courseInterest", status, source, "nextFollowUp", metadata, "customFields", "createdAt", city
                 FROM leads
                 WHERE phone = %s OR phone = %s OR phone LIKE %s
                 LIMIT 1;
@@ -169,9 +193,14 @@ def get_lead_by_phone(phone: str):
                     "email": row["email"],
                     "course_interest": row["courseInterest"] or "Flight Training",
                     "status": row["status"],
+                    "classification": row["status"],
+                    "source": row.get("source") or "Website",
+                    "city": row.get("city") or "",
                     "org_id": row.get("orgId"),
                     "next_follow_up": row.get("nextFollowUp"),
-                    "metadata": row.get("metadata") or {}
+                    "created_at": row.get("createdAt"),
+                    "metadata": row.get("metadata") or {},
+                    "custom_fields": row.get("customFields") or {}
                 }
 
             # 2. Fallback to voice_leads table
@@ -191,9 +220,14 @@ def get_lead_by_phone(phone: str):
                         "email": vrow["email"],
                         "course_interest": vrow["course_interest"] or "Flight Training",
                         "status": vrow["classification"],
+                        "classification": vrow["classification"],
+                        "source": "Voice Call",
+                        "city": "",
                         "org_id": None,
                         "next_follow_up": None,
-                        "metadata": {}
+                        "created_at": None,
+                        "metadata": {},
+                        "custom_fields": {}
                     }
             except Exception:
                 pass
@@ -205,9 +239,19 @@ def get_lead_by_phone(phone: str):
     finally:
         conn.close()
 
-def save_lead(name: str, phone: str, email: str = None, course: str = None, status: str = "NEW"):
+def save_lead(
+    name: str, 
+    phone: str, 
+    email: str = None, 
+    course: str = None, 
+    status: str = "NEW",
+    city: str = None,
+    source: str = "VOICE_AGENT",
+    custom_fields: dict = None,
+    notes: str = None
+):
     """
-    Saves or updates a lead record in the CRM leads table in Cloud SQL.
+    Saves or updates a lead record in the CRM leads table in Cloud SQL with all Add New Lead fields.
     """
     conn = get_connection()
     if not conn:
@@ -216,10 +260,11 @@ def save_lead(name: str, phone: str, email: str = None, course: str = None, stat
 
     try:
         cleaned_phone = clean_phone_number(phone)
+        custom_fields_json = json.dumps(custom_fields or {})
         with conn.cursor() as cur:
             org_id = get_default_org_id(cur)
             # Check existing lead in CRM leads table
-            cur.execute('SELECT id, "courseInterest", status FROM leads WHERE phone = %s OR phone = %s;', (phone, cleaned_phone))
+            cur.execute('SELECT id, "courseInterest", status, metadata, "customFields" FROM leads WHERE phone = %s OR phone = %s;', (phone, cleaned_phone))
             existing = cur.fetchone()
 
             if existing:
@@ -228,21 +273,45 @@ def save_lead(name: str, phone: str, email: str = None, course: str = None, stat
                     UPDATE leads 
                     SET name = COALESCE(%s, name),
                         email = COALESCE(%s, email),
+                        city = COALESCE(%s, city),
                         "courseInterest" = COALESCE(%s, "courseInterest"),
+                        "customFields" = COALESCE("customFields", '{}'::jsonb) || %s::jsonb,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
                         "lastActivityAt" = CURRENT_TIMESTAMP,
                         "updatedAt" = CURRENT_TIMESTAMP
                     WHERE id = %s
                     RETURNING *;
-                """, (name, email, course, lead_id))
+                """, (name, email, city, course, custom_fields_json, custom_fields_json, lead_id))
                 updated = cur.fetchone()
                 return dict(updated) if updated else dict(existing)
             else:
                 cur.execute("""
-                    INSERT INTO leads (id, "orgId", name, phone, email, "courseInterest", status, source, "lastActivityAt", "createdAt", "updatedAt")
-                    VALUES (gen_random_uuid(), %s, %s, %s, %s, %s, %s, 'VOICE_AGENT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO leads (
+                        id, "orgId", name, phone, email, city, "courseInterest", status, source, 
+                        "customFields", metadata, "lastActivityAt", "createdAt", "updatedAt"
+                    )
+                    VALUES (
+                        gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, 
+                        %s::jsonb, %s::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
                     RETURNING *;
-                """, (org_id, name or "New Lead", cleaned_phone, email, course, status or "NEW"))
+                """, (
+                    org_id, name or "New Lead", cleaned_phone, email, city, course, 
+                    status or "NEW", source or "VOICE_AGENT", custom_fields_json, custom_fields_json
+                ))
                 inserted = cur.fetchone()
+                lead_id = inserted["id"] if inserted else None
+
+                # Log initial note activity if provided
+                if lead_id and notes:
+                    cur.execute("""
+                        INSERT INTO lead_activities (
+                            id, "leadId", "orgId", "activityType", title, notes, outcome, "createdAt"
+                        ) VALUES (
+                            gen_random_uuid(), %s, %s, 'NOTE', 'Initial Lead Intake Note', %s, 'RECORDED', CURRENT_TIMESTAMP
+                        );
+                    """, (lead_id, org_id, notes))
+
                 return dict(inserted) if inserted else None
     except Exception as e:
         print(f"DB Error (save_lead): {e}")
@@ -260,16 +329,21 @@ def record_call_outcome(
     summary: str = None,
     callback_time = None,
     course_interest: str = None,
-    classification: str = None
+    classification: str = None,
+    lead_name: str = None,
+    email: str = None,
+    city: str = None,
+    custom_fields: dict = None,
+    user_query: str = None,
+    booking_intent: str = None
 ):
     """
     Core CRM synchronization function.
     Updates the Cloud SQL leads table and logs a structured activity in lead_activities.
-    Handles all 4 business scenarios:
-      1. CONNECTED: call conversed, updates status to INTERESTED/CONTACTED, attaches recording URL.
-      2. NO_ANSWER / BUSY / REJECTED: sets status to FOLLOW_UP, schedules nextFollowUp for +2 hours.
-      3. EARLY_HANGUP: caller dropped early, sets status to FOLLOW_UP, schedules nextFollowUp for +4 hours.
-      4. CALLBACK_REQUESTED: sets status to FOLLOW_UP, schedules nextFollowUp for the requested datetime.
+    Handles all qualification verification fields and call outcomes:
+      - Validates lead (Hot/Warm/Cold)
+      - Records age 18+ verification, education institute awareness, Ramphal Chowk campus preference
+      - Books a call with admission counsellor or schedules a visit at Ramphal Chowk
     """
     conn = get_connection()
     if not conn:
@@ -287,6 +361,16 @@ def record_call_outcome(
         activity_type = "CALL"
         activity_title = f"AI Voice Call ({direction.title()})"
         activity_notes = summary or ""
+
+        # Check booking intent / outcome
+        if booking_intent in ["Campus Visit at Ramphal Chowk", "Campus Visit"]:
+            new_status = "INTERESTED"
+            activity_type = "MEETING"
+            activity_title = "Scheduled Campus Visit - Ramphal Chowk, Dwarka"
+        elif booking_intent in ["Counselling Call", "Admissions Call"]:
+            new_status = "INTERESTED"
+            activity_type = "CALL"
+            activity_title = "Scheduled Admission Counsellor Call"
 
         if outcome in ["NO_ANSWER", "BUSY", "REJECTED", "MISSED", "FAILED"]:
             new_status = "FOLLOW_UP"
@@ -313,12 +397,23 @@ def record_call_outcome(
                 next_follow_up = now + timedelta(hours=24)
             activity_notes = f"Customer requested a callback at {next_follow_up.strftime('%Y-%m-%d %H:%M UTC')}. {summary or ''}"
         elif outcome in ["CONNECTED", "COMPLETED"]:
-            if classification in ["Hot", "Warm"]:
-                new_status = "INTERESTED"
-            else:
-                new_status = "CONTACTED"
-            activity_title = f"AI Voice Call Completed - {course_interest or (lead.get('course_interest') if lead else 'Pilot Training')}"
+            if not new_status:
+                if classification in ["Hot", "Warm"]:
+                    new_status = "INTERESTED"
+                else:
+                    new_status = "CONTACTED"
+            if not activity_title.startswith("Scheduled"):
+                activity_title = f"AI Call Completed - {course_interest or (lead.get('course_interest') if lead else 'Pilot Training')}"
             activity_notes = summary or f"AI qualifying call completed. Classification: {classification}."
+
+        custom_fields_payload = custom_fields or {}
+        if user_query:
+            custom_fields_payload["user_query"] = user_query
+        if booking_intent:
+            custom_fields_payload["booking_intent"] = booking_intent
+        if classification:
+            custom_fields_payload["classification"] = classification
+        custom_fields_json = json.dumps(custom_fields_payload)
 
         with conn.cursor() as cur:
             if not org_id:
@@ -328,23 +423,53 @@ def record_call_outcome(
             if not lead_id:
                 cleaned_phone = clean_phone_number(phone)
                 cur.execute("""
-                    INSERT INTO leads (id, "orgId", name, phone, "courseInterest", status, source, "lastActivityAt", "nextFollowUp", "createdAt", "updatedAt")
-                    VALUES (gen_random_uuid(), %s, 'Inbound Caller', %s, %s, %s, 'VOICE_AGENT', CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO leads (
+                        id, "orgId", name, phone, email, city, "courseInterest", status, 
+                        classification, source, "customFields", metadata, "lastActivityAt", 
+                        "nextFollowUp", "createdAt", "updatedAt"
+                    )
+                    VALUES (
+                        gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, 
+                        %s, 'VOICE_AGENT', %s::jsonb, %s::jsonb, CURRENT_TIMESTAMP, 
+                        %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
                     RETURNING id;
-                """, (org_id, cleaned_phone, course_interest or "Flight Training", new_status or "NEW", next_follow_up))
+                """, (
+                    org_id, lead_name or "Inbound Caller", cleaned_phone, email, city, 
+                    course_interest or "Flight Training", new_status or "NEW",
+                    classification or "Cold", custom_fields_json, custom_fields_json, next_follow_up
+                ))
                 new_row = cur.fetchone()
                 lead_id = new_row["id"] if new_row else None
             else:
                 # Update existing lead in CRM leads table
                 update_fields = [
                     '"lastActivityAt" = CURRENT_TIMESTAMP',
-                    '"updatedAt" = CURRENT_TIMESTAMP'
+                    '"updatedAt" = CURRENT_TIMESTAMP',
+                    '"customFields" = COALESCE("customFields", \'{}\'::jsonb) || %s::jsonb',
+                    'metadata = COALESCE(metadata, \'{}\'::jsonb) || %s::jsonb'
                 ]
-                params = []
+                params = [custom_fields_json, custom_fields_json]
+
+                if lead_name and lead_name not in ["Inbound Caller", "Future Pilot", "New Lead"]:
+                    update_fields.append('name = %s')
+                    params.append(lead_name)
+
+                if email:
+                    update_fields.append('email = %s')
+                    params.append(email)
+
+                if city:
+                    update_fields.append('city = %s')
+                    params.append(city)
 
                 if new_status:
                     update_fields.append('status = %s')
                     params.append(new_status)
+
+                if classification:
+                    update_fields.append('classification = %s')
+                    params.append(classification)
 
                 if next_follow_up is not None:
                     update_fields.append('"nextFollowUp" = %s')
@@ -366,7 +491,9 @@ def record_call_outcome(
                 "duration_seconds": duration,
                 "recording_url": recording_url or "",
                 "transcript": transcript or "",
-                "classification": classification or ""
+                "classification": classification or "",
+                "booking_intent": booking_intent or "",
+                "custom_fields": custom_fields_payload
             }
 
             cur.execute("""
@@ -388,14 +515,15 @@ def record_call_outcome(
                 json.dumps(activity_metadata)
             ))
 
-            # Also persist into voice_calls table for backward-compatible call analytics
-            try:
-                cur.execute("""
-                    INSERT INTO voice_calls (lead_id, direction, duration, recording_url, transcript, summary)
-                    VALUES (%s, %s, %s, %s, %s, %s);
-                """, (lead_id, direction, duration, recording_url, transcript, summary))
-            except Exception:
-                pass
+            # Also persist into voice_calls and calls table for backward-compatible call analytics
+            for tbl in ["calls", "voice_calls"]:
+                try:
+                    cur.execute(f"""
+                        INSERT INTO {tbl} (lead_id, direction, duration, recording_url, transcript, summary)
+                        VALUES (%s, %s, %s, %s, %s, %s);
+                    """, (lead_id, direction, duration, recording_url, transcript, summary))
+                except Exception:
+                    pass
 
         print(f"CRM Updated via Cloud SQL: lead={phone}, outcome={outcome}, status={new_status}, followUp={next_follow_up}")
     except Exception as e:

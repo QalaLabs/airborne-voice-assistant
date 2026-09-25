@@ -72,17 +72,23 @@ def upload_audio_file(local_path: str, destination_blob_name: str, content_type:
 def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> str:
     """
     Downloads call recording from TeleCMI / Twilio and archives it to GCS.
+    Uses unique timestamp and random identifier to prevent overwriting repeat calls.
     Returns the permanent Cloud Storage public URL.
     """
     if not recording_url:
         return ""
 
-    blob_name = f"call-recordings/call_{call_identifier}.mp3"
+    import time
+    import uuid
+    timestamp = int(time.time())
+    rand_suffix = uuid.uuid4().hex[:6]
+    blob_name = f"call-recordings/call_{call_identifier}_{timestamp}_{rand_suffix}.mp3"
     client = get_storage_client()
     if client and GCS_BUCKET_NAME:
         try:
             print(f"Downloading call recording from {recording_url}...")
-            resp = requests.get(recording_url, timeout=30)
+            auth = (config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN) if ("twilio" in recording_url and config.TWILIO_ACCOUNT_SID) else None
+            resp = requests.get(recording_url, auth=auth, timeout=30)
             resp.raise_for_status()
             
             bucket = client.bucket(GCS_BUCKET_NAME)

@@ -1,6 +1,7 @@
 import time
 import os
 import json
+import re
 from voice_test import listen
 from tts_test import speak_and_get_url
 from gpt_test import chat_with_gpt
@@ -19,6 +20,16 @@ CONVERSATIONAL_FILLERS = {
     "bye", "goodbye", "thanks", "thank you", "shukriya", "alvida", "theek hai", "haan"
 }
 
+AVIATION_KEYWORDS = {
+    "cpl", "atpl", "rtr", "ground", "class", "classes", "fee", "fees", "cost", "price",
+    "duration", "batch", "batches", "simulator", "sim", "airbus", "a320", "fbs",
+    "cadet", "airline", "interview", "gd", "pi", "psychomotor", "cass", "compass",
+    "adapt", "cabin", "crew", "flight", "attendant", "ppl", "multi-engine", "mer",
+    "medical", "medicals", "class 1", "class 2", "eligibility", "maths", "physics",
+    "nios", "age", "navrang", "modassir", "dwarka", "location", "address", "hostel",
+    "syllabus", "exam", "dgca"
+}
+
 HUMAN_TRANSFER_PHRASES = [
     "talk to a person", "talk to human", "real person", "speak to someone",
     "connect me", "transfer me", "admissions counselor", "human agent",
@@ -27,11 +38,19 @@ HUMAN_TRANSFER_PHRASES = [
 
 def should_retrieve_knowledge(user_text: str) -> bool:
     """
-    Selectively gates RAG vector searches to save 100-300ms on simple conversational filler turns.
+    Selectively gates RAG vector searches to save 100-300ms on simple conversational filler turns,
+    while guaranteeing that queries containing aviation questions, course queries, or pricing always trigger RAG.
     """
     cleaned = user_text.strip().lower()
-    if cleaned in CONVERSATIONAL_FILLERS or len(cleaned.split()) <= 2:
+    words = cleaned.split()
+    
+    # If any specific aviation term, course, or question keyword is present, always retrieve context
+    if any(k in cleaned for k in AVIATION_KEYWORDS):
+        return True
+        
+    if cleaned in CONVERSATIONAL_FILLERS or len(words) <= 1:
         return False
+        
     return True
 
 def get_pruned_context(history: list, window_size: int = 6) -> list:
@@ -43,22 +62,35 @@ def get_pruned_context(history: list, window_size: int = 6) -> list:
     return history[-window_size:]
 
 SYSTEM_PROMPT = """
-You are Capt. Modassir, a respected pilot advisor and mentor at Airborne Aviation Academy in Dwarka, Delhi.
-Your approach is NEVER pushy or salesy. Instead, you act as a genuine mentor who listens, validates the student's aviation dream, and naturally moulds the conversation so the student feels eager and excited to take the next step.
+You are Capt. Modassir, a respected pilot advisor and admissions mentor at Airborne Aviation Academy at Ramphal Chowk, Dwarka, Delhi.
+Your approach is NEVER pushy or aggressive. Instead, you act as an authentic, encouraging pilot mentor who listens, answers questions accurately from our official website, conducts essential verification checks, and naturally guides the caller toward booking an admission consultation or campus visit.
 
-Tone & Conversational Persona:
-- Warm, advisory, encouraging, and calm Hinglish tone (Hindi + English mix).
-- Keep replies concise (2-3 short sentences max per turn) so it sounds natural when spoken over the phone.
+Tone, Language & Conversational Persona:
+- Fluent Bilingual (English & Hinglish):
+  * You speak both English and Hinglish fluently.
+  * If the caller speaks in English, asks questions in English, or requests English (e.g., "Can you speak in English?", "Speak in English please"), respond immediately in fluent, professional, warm English.
+  * If the caller speaks in Hindi or Hinglish, respond in warm, advisory Hinglish (Hindi + English natural mix).
+  * Seamlessly match the caller's language preference.
+- Advisory & Mentoring Tone: Warm, polite, advisory, and calm.
+- Keep replies concise (2-3 short sentences max per turn) so it sounds crisp and natural over phone telephony.
 
-Consultative Steering Framework:
-1. **Empathy & Rapport:** Validate their career ambition (e.g. "CPL is an amazing career choice! Clearing DGCA exams early gives you a huge advantage in airline selections.").
-2. **Clear Information:** Answer their questions on course fees, DGCA Class 1/2 medicals, or eligibility (10+2 Physics/Maths) accurately using the provided website context.
-3. **Subtle & Eager Value Offering (Not Pushy):**
-   - Frame the counselling call or campus visit as a rare, highly valuable experience for their personal clarity.
-   - Example moulding phrases:
-     * "Instead of just reading about pilot rules, most students find it super helpful to spend 15 minutes talking directly to Capt. Navrang Singh or experiencing our A320 simulator at Dwarka. It gives you total clarity."
-     * "Would you like me to hold a free simulator trial slot or a mentor call for you this week so you can see how it feels?"
-4. **Confirm & Close:** When the student eagerly agrees, ask for their preferred day/time, confirm that the instant booking confirmation link will be sent to their WhatsApp, wish them clear skies, and include "[EXIT]" in your response to complete the call.
+Mandatory Conversational Framework & Verification Steps:
+1. Personal Details & Intent:
+   - Learn the caller's name (if not known).
+   - Clarify which course they are calling about (e.g. DGCA CPL Ground Classes, Cadet Pilot Program, A320 Simulator, Airline Prep, Cabin Crew, etc.) and what their primary question or doubt is.
+2. Accurate Course Guidance (RAG Context):
+   - Answer their query accurately using the provided website context (fees, duration, DGCA medicals, 10+2 PCM eligibility, NIOS acceptance, etc.).
+3. Essential Course Verification Checks (Ask smoothly across turns):
+   - Age check: Verify if the candidate is 18 years or above (note: minimum 17 to start DGCA ground classes, 18 for commercial pilot license issuance).
+   - Institutional Awareness: Ensure they know Airborne Aviation Academy is a professional aviation education and ground training academy, and NOT a job placement agency or consultancy (we train pilots to clear DGCA exams & airline selections on merit).
+   - Location & Campus: Ask where they currently stay/live, and confirm if they are open to attending in-person classes and simulator sessions at our Ramphal Chowk, Sector 7, Dwarka, New Delhi campus.
+4. Call Outcome Goal (Must achieve on every call):
+   - Validate the lead.
+   - Secure one of two primary outcomes:
+     a) Book a 1-on-1 career consultation call with senior pilot mentor Capt. Navrang Singh, OR
+     b) Schedule an in-person campus visit and A320 simulator walkthrough at our Ramphal Chowk, Dwarka campus.
+   - Ask for their preferred day and time (e.g. in Hinglish: "Kal dopahar 3 baje ya Saturday morning?", or in English: "Would tomorrow at 3 PM or Saturday morning suit you best?").
+   - Confirm that the instant calendar link and syllabus brochure are being sent directly to their WhatsApp, wish them clear skies, and include "[EXIT]" in your response to close the call.
 """
 
 def get_greeting_voice_url(text: str) -> str:
@@ -146,16 +178,20 @@ def handle_conversation(recording_url: str, phone: str, direction: str):
     dynamic_system_prompt = f"{SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{context}"
     pruned_history = get_pruned_context(history, window_size=6)
     ai_response = chat_with_gpt(caller_input, pruned_history, dynamic_system_prompt)
+    ai_response = ai_response.replace("₹", "Rs. ")
     t_llm = time.time() - t_llm_start
-    print(f"AI Response: '{ai_response}'")
+    try:
+        print(f"AI Response: '{ai_response}'")
+    except Exception:
+        print(f"AI Response: '{ai_response.encode('ascii', errors='replace').decode('ascii')}'")
 
     # 9. Append to Full History & State Persistence
     history.append({"role": "user", "content": caller_input})
     history.append({"role": "assistant", "content": ai_response})
 
     # Detect exit signal in response
-    should_hang_up = "[EXIT]" in ai_response or "[exit]" in ai_response.lower()
-    clean_response = ai_response.replace("[EXIT]", "").replace("[exit]", "").strip()
+    should_hang_up = bool(re.search(r'\[exit\]', ai_response, flags=re.IGNORECASE))
+    clean_response = re.sub(r'\[exit\]\.?', '', ai_response, flags=re.IGNORECASE).strip()
 
     supabase_client.save_conversation_history(phone, history, direction)
 
@@ -187,6 +223,8 @@ def clear_session(phone: str):
     """
     supabase_client.clear_conversation_history(phone)
 
+_active_pipelines = set()
+
 def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
     """
     Asynchronous post-call processor.
@@ -194,131 +232,178 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
     2. Extracts lead qualifiers, course interest, and callback intent using LLM.
     3. Updates CRM (leads & lead_activities) directly in Cloud SQL.
     4. Triggers secondary automations (WhatsApp & CRM sync).
+    Guarded against duplicate / concurrent pipeline execution.
     """
-    print(f"Post-Call: Starting pipeline for {phone}...")
-    transcript = get_transcript_string(phone)
-    if not transcript:
-        print("Post-Call: Empty transcript. Skipping processing.")
+    cleaned_phone = phone.replace(" ", "").replace("-", "")
+    if cleaned_phone in _active_pipelines:
+        print(f"Post-Call: Pipeline already executing for {cleaned_phone}. Skipping duplicate trigger.")
         return
 
-    # 1. Archive call recording to Google Cloud Storage bucket
-    import storage_service
-    gcs_recording_url = storage_service.upload_call_recording_from_url(
-        recording_url, phone.replace("+", "")
-    ) if recording_url else ""
-        
-    parser_prompt = f"""
-    You are an automated CRM parser for a pilot school: Airborne Aviation Academy.
-    Review the call transcript below and extract:
-    1. course_interest: One of the 11 courses of Airborne:
-       - DGCA CPL Ground Classes
-       - ATPL Ground School
-       - Radio Telephony (RTR-A) Exam Prep
-       - Cadet Pilot Program Prep
-       - GD & PI Course
-       - Comprehensive Airline Selection Prep
-       - Psychomotor Test Prep (CASS/COMPASS/ADAPT)
-       - Airbus A320 Simulator FBS
-       - Cabin Crew / Flight Attendant Training
-       - Private Pilot License (PPL) Ground Classes
-       - Multi-Engine Rating (MER) Ground School
-       Or 'Unknown' if not mentioned.
-    2. booking_intent: 'Counselling Call' / 'Campus Visit' / 'None'.
-    3. budget_status: 'Ready' / 'Not Ready' / 'Unknown'.
-    4. timeline_urgency: 'Immediate' / '3 Months' / '6+ Months' / 'Unknown'.
-    5. classification: 'Hot' (if booking_intent is Counselling Call or Campus Visit, or budget is Ready + immediate timeline) / 'Warm' (interested, but planning) / 'Cold' (no interest/wrong number).
-    6. callback_requested: true if the caller specifically asked to call back later / tomorrow / at another time, otherwise false.
-    7. callback_time: estimated ISO timestamp or relative description (e.g. 'Tomorrow 4 PM', '2 hours later') if callback_requested is true, else null.
-
-    Output ONLY as a valid JSON object. Do not include markdown wraps or explanations.
-    Example output format:
-    {{"course_interest": "DGCA CPL Ground Classes", "booking_intent": "Campus Visit", "budget_status": "Ready", "timeline_urgency": "Immediate", "classification": "Hot", "callback_requested": false, "callback_time": null}}
-
-    TRANSCRIPT:
-    {transcript}
-    """
-    
-    # Run parsing query with structured JSON mode
-    parse_result = chat_with_gpt(parser_prompt, json_mode=True)
-    print(f"Post-Call: LLM Parser Output: {parse_result}")
-    
-    # Load defaults
-    data = {
-        "course_interest": "Unknown",
-        "budget_status": "Unknown",
-        "timeline_urgency": "Unknown",
-        "classification": "Cold",
-        "callback_requested": False,
-        "callback_time": None
-    }
-    
-    # Parse JSON output safely
+    _active_pipelines.add(cleaned_phone)
     try:
-        clean_json = parse_result.strip()
-        if clean_json.startswith("```json"):
-            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
-        elif clean_json.startswith("```"):
-            clean_json = clean_json.split("```")[1].split("```")[0].strip()
-            
-        data.update(json.loads(clean_json))
-    except Exception as e:
-        print(f"Post-Call: JSON parsing failed ({e}). Attempting keyword fallback.")
-        for course in [
-            "CPL", "ATPL", "RTR", "Cadet", "GD", "Airline", "Psychomotor", "Simulator", "Cabin Crew", "PPL", "Multi-Engine"
-        ]:
-            if course.lower() in parse_result.lower():
-                data["course_interest"] = course
-        if "hot" in parse_result.lower():
-            data["classification"] = "Hot"
-        elif "warm" in parse_result.lower():
-            data["classification"] = "Warm"
-            
-    # Retrieve lead profile from Cloud SQL to fetch name
-    lead_name = "Future Pilot"
-    lead = supabase_client.get_lead_by_phone(phone)
-    if lead:
-        lead_name = lead.get("name", "Future Pilot")
-        if data["course_interest"] == "Unknown" and lead.get("course_interest"):
-            data["course_interest"] = lead.get("course_interest")
-        
-    duration_estimate = len(transcript.split()) * 2
-    summary = f"Qualifying conversation for {data['course_interest']}. Classified as {data['classification']}."
-    
-    # Determine outcome
-    outcome = "CALLBACK_REQUESTED" if data.get("callback_requested") else "CONNECTED"
-    if outcome == "CALLBACK_REQUESTED":
-        summary = f"Callback requested ({data.get('callback_time')}). {summary}"
+        print(f"Post-Call: Starting pipeline for {phone}...")
+        transcript = get_transcript_string(phone)
+        if not transcript:
+            print(f"Post-Call: Empty transcript or session already processed for {phone}. Skipping processing.")
+            return
 
-    # 1. Update CRM (leads table & lead_activities) directly in Cloud SQL
-    supabase_client.record_call_outcome(
-        phone=phone,
-        outcome=outcome,
-        direction=direction,
-        duration=duration_estimate,
-        recording_url=gcs_recording_url,
-        transcript=transcript,
-        summary=summary,
-        callback_time=data.get("callback_time"),
-        course_interest=data["course_interest"],
-        classification=data["classification"]
-    )
-    
-    # 2. Synchronize with external TeleCRM if configured
-    lead_payload = {
-        "name": lead_name,
-        "phone": phone,
-        "course_interest": data["course_interest"],
-        "classification": data["classification"],
-        "budget_status": data["budget_status"],
-        "timeline_urgency": data["timeline_urgency"],
-        "recording_url": gcs_recording_url
-    }
-    crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
-    
-    # 3. Trigger WhatsApp automated follow-up
-    automation.trigger_post_call_automations(phone, data["classification"], lead_name)
-    
-    # 4. Clear dialogue session
-    clear_session(phone)
-    print(f"Post-Call: Pipeline completed for {phone}.")
+        # 1. Archive call recording to Google Cloud Storage bucket
+        import storage_service
+        gcs_recording_url = storage_service.upload_call_recording_from_url(
+            recording_url, phone.replace("+", "")
+        ) if recording_url else ""
+            
+        parser_prompt = f"""
+        You are an automated CRM lead parser for Airborne Aviation Academy (Ramphal Chowk, Dwarka, Delhi).
+        Review the telephone call transcript below and extract all lead details to match our CRM Add New Lead form:
+        1. name: Caller's full name (if stated in call, else null).
+        2. email: Email address (if stated, else null).
+        3. course_interest: Canonical course of interest:
+           - DGCA CPL Ground Classes
+           - ATPL Ground School
+           - Radio Telephony (RTR-A) Exam Prep
+           - Cadet Pilot Program Prep
+           - GD & PI Course
+           - Comprehensive Airline Selection Prep
+           - Psychomotor Test Prep (CASS/COMPASS/ADAPT)
+           - Airbus A320 Simulator FBS
+           - Cabin Crew / Flight Attendant Training
+           - Private Pilot License (PPL) Ground Classes
+           - Flight Dispatcher Training
+           - Multi-Engine Rating (MER) Ground School
+           Or 'Flight Training' / 'Unknown'
+        4. user_query: Brief summary of the caller's primary question, doubt, or reason for calling.
+        5. is_18_above: true / false / 'Unknown' (based on age question).
+        6. city_or_location: City, area, or locality where the caller stays (e.g. 'Dwarka', 'Delhi', 'Gurgaon', 'Janakpuri').
+        7. confirmed_education_institute: true if confirmed aware that Airborne is a training academy and not a job agency, else false/null.
+        8. open_to_ramphal_chowk: true if willing to attend classes or simulator sessions at Ramphal Chowk, Dwarka campus, else false/null.
+        9. booking_intent: 'Campus Visit at Ramphal Chowk' / 'Counselling Call' / 'None'.
+        10. scheduled_time: Preferred date/time (e.g. 'Tomorrow 3 PM', 'Saturday 11 AM') if a visit or call was agreed, else null.
+        11. classification: 'Hot' (if booked a campus visit / counselling call, or verified 18+ and confirmed interest) / 'Warm' (interested, checking options) / 'Cold' (wrong number, disqualified, no interest).
+        12. callback_requested: true if caller asked to be called back later, else false.
+        13. callback_time: estimated ISO timestamp or description if callback requested, else null.
+        14. notes: A concise CRM note summarizing their profile, verification answers, and requested next steps.
+
+        Output ONLY as a valid JSON object. Do not include markdown wraps or explanations.
+        Example output format:
+        {{"name": "Aayush", "email": null, "course_interest": "DGCA CPL Ground Classes", "user_query": "Inquired about CPL fees and medicals", "is_18_above": true, "city_or_location": "Dwarka Sector 7", "confirmed_education_institute": true, "open_to_ramphal_chowk": true, "booking_intent": "Campus Visit at Ramphal Chowk", "scheduled_time": "Tomorrow 4 PM", "classification": "Hot", "callback_requested": false, "callback_time": null, "notes": "Candidate Aayush, age 18+, confirmed aware that Airborne is an educational academy. Lives in Dwarka and open to Ramphal Chowk campus. Booked campus visit tomorrow at 4 PM."}}
+
+        TRANSCRIPT:
+        {transcript}
+        """
+        
+        # Run parsing query with structured JSON mode
+        parse_result = chat_with_gpt(parser_prompt, json_mode=True)
+        print(f"Post-Call: LLM Parser Output: {parse_result}")
+        
+        # Load defaults
+        data = {
+            "name": None,
+            "email": None,
+            "course_interest": "Unknown",
+            "user_query": None,
+            "is_18_above": "Unknown",
+            "city_or_location": None,
+            "confirmed_education_institute": None,
+            "open_to_ramphal_chowk": None,
+            "booking_intent": "None",
+            "scheduled_time": None,
+            "classification": "Cold",
+            "callback_requested": False,
+            "callback_time": None,
+            "notes": None
+        }
+        
+        # Parse JSON output safely
+        try:
+            clean_json = parse_result.strip()
+            if clean_json.startswith("```json"):
+                clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+            elif clean_json.startswith("```"):
+                clean_json = clean_json.split("```")[1].split("```")[0].strip()
+                
+            data.update(json.loads(clean_json))
+        except Exception as e:
+            print(f"Post-Call: JSON parsing failed ({e}). Attempting keyword fallback.")
+            for course in [
+                "CPL", "ATPL", "RTR", "Cadet", "GD", "Airline", "Psychomotor", "Simulator", "Cabin Crew", "PPL", "Multi-Engine"
+            ]:
+                if course.lower() in parse_result.lower():
+                    data["course_interest"] = course
+            if "hot" in parse_result.lower():
+                data["classification"] = "Hot"
+            elif "warm" in parse_result.lower():
+                data["classification"] = "Warm"
+                
+        # Retrieve lead profile from Cloud SQL to fetch existing name
+        lead = supabase_client.get_lead_by_phone(phone)
+        resolved_name = data.get("name") or (lead.get("name") if lead and lead.get("name") not in ["Inbound Caller", "Future Pilot", "New Lead"] else None) or "Future Pilot"
+        
+        if data["course_interest"] in ["Unknown", "Flight Training"] and lead and lead.get("course_interest"):
+            data["course_interest"] = lead.get("course_interest")
+            
+        duration_estimate = len(transcript.split()) * 2
+        summary = data.get("notes") or f"Qualifying conversation for {data['course_interest']}. Classified as {data['classification']}."
+        
+        # Determine outcome
+        outcome = "CALLBACK_REQUESTED" if data.get("callback_requested") else "CONNECTED"
+        if data.get("booking_intent") == "Campus Visit at Ramphal Chowk":
+            outcome = "CAMPUS_VISIT_SCHEDULED"
+        elif data.get("booking_intent") == "Counselling Call":
+            outcome = "COUNSELLING_SCHEDULED"
+
+        if outcome == "CALLBACK_REQUESTED":
+            summary = f"Callback requested ({data.get('callback_time')}). {summary}"
+
+        custom_fields = {
+            "is_18_above": data.get("is_18_above"),
+            "city_or_location": data.get("city_or_location"),
+            "confirmed_education_institute": data.get("confirmed_education_institute"),
+            "open_to_ramphal_chowk": data.get("open_to_ramphal_chowk"),
+            "scheduled_time": data.get("scheduled_time"),
+            "user_query": data.get("user_query"),
+            "booking_intent": data.get("booking_intent"),
+            "notes": data.get("notes")
+        }
+
+        # 1. Update CRM (leads table & lead_activities) directly in Cloud SQL
+        supabase_client.record_call_outcome(
+            phone=phone,
+            outcome=outcome,
+            direction=direction,
+            duration=duration_estimate,
+            recording_url=gcs_recording_url,
+            transcript=transcript,
+            summary=summary,
+            callback_time=data.get("callback_time") or data.get("scheduled_time"),
+            course_interest=data["course_interest"],
+            classification=data["classification"],
+            lead_name=resolved_name,
+            email=data.get("email"),
+            city=data.get("city_or_location"),
+            custom_fields=custom_fields,
+            user_query=data.get("user_query"),
+            booking_intent=data.get("booking_intent")
+        )
+        
+        # 2. Synchronize with external TeleCRM if configured
+        lead_payload = {
+            "name": lead_name,
+            "phone": phone,
+            "course_interest": data["course_interest"],
+            "classification": data["classification"],
+            "budget_status": data["budget_status"],
+            "timeline_urgency": data["timeline_urgency"],
+            "recording_url": gcs_recording_url
+        }
+        crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
+        
+        # 3. Trigger WhatsApp automated follow-up
+        automation.trigger_post_call_automations(phone, data["classification"], lead_name)
+        
+        # 4. Clear dialogue session
+        clear_session(phone)
+        print(f"Post-Call: Pipeline completed for {phone}.")
+    finally:
+        _active_pipelines.discard(cleaned_phone)
 

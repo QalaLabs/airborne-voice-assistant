@@ -6,9 +6,19 @@ try:
 except ImportError:
     Client = None
 
+try:
+    import piopiy
+except ImportError:
+    try:
+        import sys
+        sys.path.append(r"C:\Users\aashi\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages")
+        import piopiy
+    except ImportError:
+        piopiy = None
+
 def make_outbound_call(phone_number: str, lead_name: str) -> bool:
     """
-    Triggers an outbound call using TeleCMI (primary) or Twilio (fallback).
+    Triggers an outbound call using PioPiy / TeleCMI (primary) or Twilio (fallback).
     Bridges the call to the FastAPI '/telecmi/answer' or '/answer-call' endpoints.
     """
     # Normalize phone number (ensure country code)
@@ -25,7 +35,33 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
             
     print(f"Telephony: Initiating outbound call to {lead_name} at {formatted_phone}...")
     
-    # 1. Check if TeleCMI API is configured
+    # 1. PioPiy Modern SDK (Primary)
+    if config.TELECMI_TOKEN and piopiy:
+        try:
+            client = piopiy.RestClient(token=config.TELECMI_TOKEN)
+            caller_id = config.TELECMI_PHONE_NUMBER or "917943446755"
+            app_id = "e65072de-7571-4930-a51b-181fba552e7d"
+            
+            # ElevenLabs AI Voice Audio for Capt. Modassir
+            greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_modassir.mp3"
+
+            builder = piopiy.PipelineBuilder()
+            builder.play(greeting_url)
+            builder.record()
+            pipeline = builder.build()
+            
+            res = client.pcmo.call(
+                caller_id=caller_id,
+                to_number=telecmi_to,
+                app_id=app_id,
+                pipeline=pipeline
+            )
+            print(f"Telephony: PioPiy outbound call dispatched: {res}")
+            return True
+        except Exception as e:
+            print(f"Telephony Error: PioPiy SDK dispatch error: {e}")
+
+    # 1b. TeleCMI Legacy REST API fallback
     if config.TELECMI_APP_ID and config.TELECMI_APP_SECRET:
         try:
             answer_url = f"{config.NGROK_URL}/telecmi/answer?direction=outbound&phone={formatted_phone}"
@@ -41,15 +77,13 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
             payload = {
                 "appid": config.TELECMI_APP_ID,
                 "secret": config.TELECMI_APP_SECRET,
-                "from": config.TELECMI_PHONE_NUMBER or config.TELECMI_SIP_USER or "airborneaviation",
+                "from": config.TELECMI_PHONE_NUMBER or "917943446755",
                 "to": telecmi_to,
                 "answer_url": answer_url
             }
             
-            print(f"Telephony: Dispatching TeleCMI API call for {formatted_phone} (Answer URL: {answer_url})...")
+            print(f"Telephony: Dispatching TeleCMI REST API call for {formatted_phone}...")
             response = requests.post(telecmi_api_url, json=payload, headers=headers, timeout=10)
-
-            
             if response.status_code in [200, 201]:
                 print(f"Telephony: TeleCMI call initiated successfully: {response.text}")
                 return True

@@ -34,8 +34,8 @@ gcloud run deploy $ServiceName `
     --max-instances 10 `
     --no-cpu-throttling `
     --add-cloudsql-instances $CloudSqlInstance `
-    --set-env-vars "APP_URL=https://airborne-voice-assistant-368523757732.asia-south1.run.app,GCS_BUCKET_NAME=$BucketName,GCP_PROJECT=$ProjectId,GEMINI_MODEL=gemini-2.0-flash,OPENAI_MODEL=gpt-4o-mini,ELEVENLABS_MODEL_ID=eleven_multilingual_v2,CAMPUS_BOOKING_URL=https://calendly.com/airborne-aviation/campus-visit" `
-    --set-secrets "DATABASE_URL=DATABASE_URL:latest,TELECMI_APP_ID=TELECMI_APP_ID:latest,TELECMI_APP_SECRET=TELECMI_APP_SECRET:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
+    --set-env-vars "APP_URL=https://airborne-voice-assistant-hehklcowza-el.a.run.app,GCS_BUCKET_NAME=$BucketName,GCP_PROJECT=$ProjectId,GEMINI_MODEL=gemini-flash-latest,OPENAI_MODEL=gpt-4o-mini,ELEVENLABS_MODEL_ID=eleven_multilingual_v2,ELEVENLABS_VOICE_ID=eJTrVjiaPKqBMpMujQdM,TELECMI_SIP_USER=airborneaviation,TELECMI_NAMESPACE_URL=qalalabs_airborne.piopiy.io,CAMPUS_BOOKING_URL=https://calendly.com/airborne-aviation/campus-visit" `
+    --set-secrets "DATABASE_URL=DATABASE_URL:latest,TELECMI_APP_ID=TELECMI_APP_ID:latest,TELECMI_APP_SECRET=TELECMI_APP_SECRET:latest,TELECMI_TOKEN=TELECMI_TOKEN:latest,TELECMI_SIP_PASS=TELECMI_SIP_PASS:latest,ELEVENLABS_API_KEY=ELEVENLABS_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
 
 # 3. Retrieve live service URL
 $ServiceUrl = (gcloud run services describe $ServiceName --project $ProjectId --platform managed --region $Region --format 'value(status.url)').Trim()

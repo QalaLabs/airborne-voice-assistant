@@ -21,8 +21,10 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
     Integrates with Google Gemini API via REST requests to process conversations.
     This avoids dependencies on external SDK packages.
     """
-    model = config.GEMINI_MODEL or "gemini-flash-latest"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    preferred_model = config.GEMINI_MODEL or "gemini-3.8-flash"
+    fallback_models = [preferred_model, "gemini-3.6-flash", "gemini-3.1-flash-lite"]
+    # De-duplicate while preserving order
+    models_to_try = list(dict.fromkeys(fallback_models))
     
     headers = {
         "Content-Type": "application/json",
@@ -48,8 +50,9 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
     })
     
     generation_config = {
-        "maxOutputTokens": 500 if json_mode else 150,
-        "temperature": 0.2 if json_mode else 0.7
+        "maxOutputTokens": 500 if json_mode else 300,
+        "temperature": 0.2 if json_mode else 0.7,
+        "thinkingConfig": {"thinkingBudget": 0}
     }
     if json_mode:
         generation_config["responseMimeType"] = "application/json"
@@ -64,17 +67,25 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
             "parts": [{"text": system_prompt}]
         }
         
-    response = requests.post(url, json=payload, headers=headers, timeout=10)
-    response.raise_for_status()
-    res_data = response.json()
-    
-    # Parse out generated text response
-    try:
-        text = res_data['candidates'][0]['content']['parts'][0]['text']
-        return text
-    except (KeyError, IndexError, TypeError) as e:
-        print(f"Gemini Response Parsing Error: {e}, Response Body: {res_data}")
-        raise e
+    last_err = None
+    for candidate_model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent"
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=12)
+            if response.status_code in [500, 503, 429]:
+                print(f"Gemini {candidate_model} returned {response.status_code}. Trying next model...")
+                continue
+            response.raise_for_status()
+            res_data = response.json()
+            parts = res_data['candidates'][0]['content']['parts']
+            text = ''.join([p.get('text', '') for p in parts if 'text' in p])
+            return text
+        except Exception as e:
+            last_err = e
+            print(f"Gemini model {candidate_model} failed ({e}). Trying fallback...")
+
+    if last_err:
+        raise last_err
 
 def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
     """
