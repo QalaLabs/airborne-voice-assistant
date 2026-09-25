@@ -9,7 +9,7 @@ class TestAirborneAssistantFlow(unittest.TestCase):
     
     def setUp(self):
         # Clear mock histories
-        assistant.histories.clear()
+        supabase_client.clear_conversation_history("+919999999999")
         
     def test_course_mapping(self):
         """
@@ -34,12 +34,14 @@ class TestAirborneAssistantFlow(unittest.TestCase):
         # First turn: Intro/Interest
         audio_url, should_hang_up = assistant.handle_conversation("https://mock-twilio-recording/rec1.wav", phone, "inbound")
         self.assertFalse(should_hang_up)
-        self.assertIn(phone, assistant.histories)
+        history = supabase_client.get_conversation_history(phone)
+        self.assertTrue(len(history) > 0)
         
         # Second turn: user ends conversation
-        assistant.histories[phone].append({"role": "user", "content": "Thank you, goodbye!"})
+        history.append({"role": "user", "content": "Thank you, goodbye!"})
         # Simulate LLM outputting exit phrase trigger
-        assistant.histories[phone].append({"role": "assistant", "content": "You are welcome. Have a safe flight! [EXIT]"})
+        history.append({"role": "assistant", "content": "You are welcome. Have a safe flight! [EXIT]"})
+        supabase_client.save_conversation_history(phone, history, "inbound")
         
         # Detects exit
         transcript = assistant.get_transcript_string(phone)

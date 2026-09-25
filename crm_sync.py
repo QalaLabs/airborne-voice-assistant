@@ -40,7 +40,7 @@ def sync_lead_with_telecrm(lead_data: dict, transcript: str = None) -> bool:
         })
         
     try:
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
         if response.status_code in [200, 201]:
             print(f"CRM Sync: Lead {lead_data.get('phone')} successfully synced to TeleCRM.")
             return True

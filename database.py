@@ -1,23 +1,81 @@
 import os
 import json
+import re
+from datetime import datetime, timedelta, timezone
 import config
 
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    from psycopg2.pool import ThreadedConnectionPool
 except ImportError:
     psycopg2 = None
     RealDictCursor = None
+    ThreadedConnectionPool = None
 
 # Get PostgreSQL Connection String
 DATABASE_URL = os.environ.get("DATABASE_URL", os.environ.get("POSTGRES_URL", ""))
 
+_pool = None
+
+def get_pool():
+    global _pool
+    if _pool is None and DATABASE_URL and ThreadedConnectionPool:
+        try:
+            _pool = ThreadedConnectionPool(
+                minconn=1,
+                maxconn=10,
+                dsn=DATABASE_URL,
+                cursor_factory=RealDictCursor
+            )
+        except Exception as e:
+            print(f"Database Pool Creation Error: {e}")
+            _pool = None
+    return _pool
+
+class PooledConnectionWrapper:
+    """
+    Wraps a pooled psycopg2 connection so calling .close() returns the connection
+    to the ThreadedConnectionPool instead of tearing down the socket.
+    """
+    def __init__(self, pool, conn):
+        self._pool = pool
+        self._conn = conn
+        self._closed = False
+
+    def close(self):
+        if not self._closed:
+            self._closed = True
+            try:
+                self._pool.putconn(self._conn)
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
 def get_connection():
     """
-    Creates and returns a new PostgreSQL connection if DATABASE_URL is configured.
+    Creates and returns a PostgreSQL connection from the connection pool (with direct fallback).
     """
     if not DATABASE_URL or not psycopg2:
         return None
+
+    pool = get_pool()
+    if pool:
+        try:
+            raw_conn = pool.getconn()
+            raw_conn.autocommit = True
+            return PooledConnectionWrapper(pool, raw_conn)
+        except Exception as e:
+            print(f"Database Pool Checkout Error: {e}")
+
     try:
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
         conn.autocommit = True
@@ -53,9 +111,103 @@ def init_db():
         conn.close()
     return False
 
-def save_lead(name: str, phone: str, email: str = None, course: str = None, status: str = "Cold"):
+def clean_phone_number(phone: str) -> str:
     """
-    Saves or updates a lead record in PostgreSQL.
+    Normalizes phone numbers to standard format (with +91 or clean digits).
+    """
+    if not phone:
+        return ""
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) == 10:
+        return f"+91{digits}"
+    elif len(digits) == 12 and digits.startswith("91"):
+        return f"+{digits}"
+    return f"+{digits}" if not phone.startswith("+") else phone
+
+def get_default_org_id(cur) -> str:
+    """
+    Retrieves default orgId from organizations table if present.
+    """
+    try:
+        cur.execute('SELECT "id" FROM organizations LIMIT 1;')
+        row = cur.fetchone()
+        if row:
+            return row["id"]
+    except Exception:
+        pass
+    return "340e4b30-22bc-44f2-be56-85b061daaddd"
+
+def get_lead_by_phone(phone: str):
+    """
+    Retrieves lead details from Cloud SQL CRM leads table (or voice_leads fallback)
+    by phone number.
+    """
+    conn = get_connection()
+    if not conn:
+        return None
+
+    try:
+        cleaned = clean_phone_number(phone)
+        raw_digits = re.sub(r"\D", "", phone)
+        last10 = raw_digits[-10:] if len(raw_digits) >= 10 else raw_digits
+
+        with conn.cursor() as cur:
+            # 1. Search CRM leads table (Prisma schema)
+            cur.execute("""
+                SELECT id, "orgId", name, phone, email, "courseInterest", status, "nextFollowUp", metadata
+                FROM leads
+                WHERE phone = %s OR phone = %s OR phone LIKE %s
+                LIMIT 1;
+            """, (phone, cleaned, f"%{last10}%"))
+            row = cur.fetchone()
+
+            if row:
+                return {
+                    "id": row["id"],
+                    "name": row["name"] or "Future Pilot",
+                    "phone": row["phone"],
+                    "email": row["email"],
+                    "course_interest": row["courseInterest"] or "Flight Training",
+                    "status": row["status"],
+                    "org_id": row.get("orgId"),
+                    "next_follow_up": row.get("nextFollowUp"),
+                    "metadata": row.get("metadata") or {}
+                }
+
+            # 2. Fallback to voice_leads table
+            try:
+                cur.execute("""
+                    SELECT id, name, phone, email, course_interest, classification
+                    FROM voice_leads
+                    WHERE phone = %s OR phone = %s OR phone LIKE %s
+                    LIMIT 1;
+                """, (phone, cleaned, f"%{last10}%"))
+                vrow = cur.fetchone()
+                if vrow:
+                    return {
+                        "id": vrow["id"],
+                        "name": vrow["name"] or "Future Pilot",
+                        "phone": vrow["phone"],
+                        "email": vrow["email"],
+                        "course_interest": vrow["course_interest"] or "Flight Training",
+                        "status": vrow["classification"],
+                        "org_id": None,
+                        "next_follow_up": None,
+                        "metadata": {}
+                    }
+            except Exception:
+                pass
+
+            return None
+    except Exception as e:
+        print(f"DB Error (get_lead_by_phone): {e}")
+        return None
+    finally:
+        conn.close()
+
+def save_lead(name: str, phone: str, email: str = None, course: str = None, status: str = "NEW"):
+    """
+    Saves or updates a lead record in the CRM leads table in Cloud SQL.
     """
     conn = get_connection()
     if not conn:
@@ -63,31 +215,33 @@ def save_lead(name: str, phone: str, email: str = None, course: str = None, stat
         return {"id": "mock-lead-uuid-1234", "name": name, "phone": phone, "classification": status}
 
     try:
+        cleaned_phone = clean_phone_number(phone)
         with conn.cursor() as cur:
-            # Check existing lead
-            cur.execute("SELECT * FROM leads WHERE phone = %s;", (phone,))
+            org_id = get_default_org_id(cur)
+            # Check existing lead in CRM leads table
+            cur.execute('SELECT id, "courseInterest", status FROM leads WHERE phone = %s OR phone = %s;', (phone, cleaned_phone))
             existing = cur.fetchone()
-            
+
             if existing:
                 lead_id = existing["id"]
                 cur.execute("""
                     UPDATE leads 
                     SET name = COALESCE(%s, name),
                         email = COALESCE(%s, email),
-                        course_interest = COALESCE(%s, course_interest),
-                        classification = %s,
-                        updated_at = CURRENT_TIMESTAMP
+                        "courseInterest" = COALESCE(%s, "courseInterest"),
+                        "lastActivityAt" = CURRENT_TIMESTAMP,
+                        "updatedAt" = CURRENT_TIMESTAMP
                     WHERE id = %s
                     RETURNING *;
-                """, (name, email, course, status, lead_id))
+                """, (name, email, course, lead_id))
                 updated = cur.fetchone()
                 return dict(updated) if updated else dict(existing)
             else:
                 cur.execute("""
-                    INSERT INTO leads (name, phone, email, course_interest, classification)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO leads (id, "orgId", name, phone, email, "courseInterest", status, source, "lastActivityAt", "createdAt", "updatedAt")
+                    VALUES (gen_random_uuid(), %s, %s, %s, %s, %s, %s, 'VOICE_AGENT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     RETURNING *;
-                """, (name or "Unknown", phone, email, course, status))
+                """, (org_id, name or "New Lead", cleaned_phone, email, course, status or "NEW"))
                 inserted = cur.fetchone()
                 return dict(inserted) if inserted else None
     except Exception as e:
@@ -96,28 +250,176 @@ def save_lead(name: str, phone: str, email: str = None, course: str = None, stat
     finally:
         conn.close()
 
-def get_lead_by_phone(phone: str):
+def record_call_outcome(
+    phone: str,
+    outcome: str,
+    direction: str = "outbound",
+    duration: int = 0,
+    recording_url: str = None,
+    transcript: str = None,
+    summary: str = None,
+    callback_time = None,
+    course_interest: str = None,
+    classification: str = None
+):
     """
-    Retrieves lead details from PostgreSQL by phone number.
+    Core CRM synchronization function.
+    Updates the Cloud SQL leads table and logs a structured activity in lead_activities.
+    Handles all 4 business scenarios:
+      1. CONNECTED: call conversed, updates status to INTERESTED/CONTACTED, attaches recording URL.
+      2. NO_ANSWER / BUSY / REJECTED: sets status to FOLLOW_UP, schedules nextFollowUp for +2 hours.
+      3. EARLY_HANGUP: caller dropped early, sets status to FOLLOW_UP, schedules nextFollowUp for +4 hours.
+      4. CALLBACK_REQUESTED: sets status to FOLLOW_UP, schedules nextFollowUp for the requested datetime.
     """
     conn = get_connection()
     if not conn:
-        return None
+        print(f"Mock DB: record_call_outcome for {phone} - outcome={outcome}")
+        return
 
     try:
+        lead = get_lead_by_phone(phone)
+        lead_id = lead["id"] if lead else None
+        org_id = lead.get("org_id") if lead else None
+
+        now = datetime.now(timezone.utc)
+        next_follow_up = None
+        new_status = None
+        activity_type = "CALL"
+        activity_title = f"AI Voice Call ({direction.title()})"
+        activity_notes = summary or ""
+
+        if outcome in ["NO_ANSWER", "BUSY", "REJECTED", "MISSED", "FAILED"]:
+            new_status = "FOLLOW_UP"
+            next_follow_up = now + timedelta(hours=2)
+            activity_title = f"AI Voice Call - {outcome.replace('_', ' ').title()}"
+            activity_notes = f"Caller did not answer / line {outcome.lower()}. Automated follow-up set for 2 hours later."
+        elif outcome == "EARLY_HANGUP":
+            new_status = "FOLLOW_UP"
+            next_follow_up = now + timedelta(hours=4)
+            activity_title = "AI Voice Call - Disconnected Early"
+            activity_notes = f"Call disconnected shortly after pickup (duration: {duration}s). Follow-up scheduled for 4 hours later."
+        elif outcome == "CALLBACK_REQUESTED":
+            new_status = "FOLLOW_UP"
+            activity_type = "FOLLOW_UP"
+            activity_title = "AI Voice Call - Callback Requested"
+            if isinstance(callback_time, datetime):
+                next_follow_up = callback_time
+            elif isinstance(callback_time, str) and callback_time:
+                try:
+                    next_follow_up = datetime.fromisoformat(callback_time.replace("Z", "+00:00"))
+                except Exception:
+                    next_follow_up = now + timedelta(hours=24)
+            else:
+                next_follow_up = now + timedelta(hours=24)
+            activity_notes = f"Customer requested a callback at {next_follow_up.strftime('%Y-%m-%d %H:%M UTC')}. {summary or ''}"
+        elif outcome in ["CONNECTED", "COMPLETED"]:
+            if classification in ["Hot", "Warm"]:
+                new_status = "INTERESTED"
+            else:
+                new_status = "CONTACTED"
+            activity_title = f"AI Voice Call Completed - {course_interest or (lead.get('course_interest') if lead else 'Pilot Training')}"
+            activity_notes = summary or f"AI qualifying call completed. Classification: {classification}."
+
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM leads WHERE phone = %s;", (phone,))
-            row = cur.fetchone()
-            return dict(row) if row else None
+            if not org_id:
+                org_id = get_default_org_id(cur)
+
+            # If lead doesn't exist yet in CRM, create one
+            if not lead_id:
+                cleaned_phone = clean_phone_number(phone)
+                cur.execute("""
+                    INSERT INTO leads (id, "orgId", name, phone, "courseInterest", status, source, "lastActivityAt", "nextFollowUp", "createdAt", "updatedAt")
+                    VALUES (gen_random_uuid(), %s, 'Inbound Caller', %s, %s, %s, 'VOICE_AGENT', CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    RETURNING id;
+                """, (org_id, cleaned_phone, course_interest or "Flight Training", new_status or "NEW", next_follow_up))
+                new_row = cur.fetchone()
+                lead_id = new_row["id"] if new_row else None
+            else:
+                # Update existing lead in CRM leads table
+                update_fields = [
+                    '"lastActivityAt" = CURRENT_TIMESTAMP',
+                    '"updatedAt" = CURRENT_TIMESTAMP'
+                ]
+                params = []
+
+                if new_status:
+                    update_fields.append('status = %s')
+                    params.append(new_status)
+
+                if next_follow_up is not None:
+                    update_fields.append('"nextFollowUp" = %s')
+                    params.append(next_follow_up)
+
+                if course_interest and (not lead or not lead.get("course_interest") or lead.get("course_interest") == "Flight Training"):
+                    update_fields.append('"courseInterest" = %s')
+                    params.append(course_interest)
+
+                params.append(lead_id)
+                query = f'UPDATE leads SET {", ".join(update_fields)} WHERE id = %s;'
+                cur.execute(query, tuple(params))
+
+            # Log into CRM lead_activities table
+            duration_mins = max(1, duration // 60) if duration > 0 else 0
+            activity_metadata = {
+                "outcome": outcome,
+                "direction": direction,
+                "duration_seconds": duration,
+                "recording_url": recording_url or "",
+                "transcript": transcript or "",
+                "classification": classification or ""
+            }
+
+            cur.execute("""
+                INSERT INTO lead_activities (
+                    id, "leadId", "orgId", "activityType", title, notes, outcome, "dueAt", "completedAt", "durationMins", metadata, "createdAt"
+                ) VALUES (
+                    gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
+                );
+            """, (
+                lead_id,
+                org_id,
+                activity_type,
+                activity_title,
+                activity_notes,
+                outcome,
+                next_follow_up,
+                now if outcome in ["CONNECTED", "COMPLETED", "EARLY_HANGUP"] else None,
+                duration_mins,
+                json.dumps(activity_metadata)
+            ))
+
+            # Also persist into voice_calls table for backward-compatible call analytics
+            try:
+                cur.execute("""
+                    INSERT INTO voice_calls (lead_id, direction, duration, recording_url, transcript, summary)
+                    VALUES (%s, %s, %s, %s, %s, %s);
+                """, (lead_id, direction, duration, recording_url, transcript, summary))
+            except Exception:
+                pass
+
+        print(f"CRM Updated via Cloud SQL: lead={phone}, outcome={outcome}, status={new_status}, followUp={next_follow_up}")
     except Exception as e:
-        print(f"DB Error (get_lead_by_phone): {e}")
-        return None
+        print(f"DB Error (record_call_outcome): {e}")
     finally:
         conn.close()
 
+def save_call_log(phone: str, direction: str, duration: int, recording_url: str, transcript: str, summary: str):
+    """
+    Wrapper for save_call_log to call record_call_outcome.
+    """
+    record_call_outcome(
+        phone=phone,
+        outcome="CONNECTED",
+        direction=direction,
+        duration=duration,
+        recording_url=recording_url,
+        transcript=transcript,
+        summary=summary
+    )
+
 def update_lead_qualification(phone: str, budget_status: str, timeline_urgency: str, course_interest: str, classification: str):
     """
-    Updates lead qualification status in PostgreSQL.
+    Updates lead qualification status in PostgreSQL CRM leads table.
     """
     conn = get_connection()
     if not conn:
@@ -125,50 +427,23 @@ def update_lead_qualification(phone: str, budget_status: str, timeline_urgency: 
         return
 
     try:
+        new_status = "INTERESTED" if classification in ["Hot", "Warm"] else "CONTACTED"
+        cleaned_phone = clean_phone_number(phone)
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE leads 
-                SET budget_status = %s,
-                    timeline_urgency = %s,
-                    course_interest = %s,
-                    classification = %s,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE phone = %s;
-            """, (budget_status, timeline_urgency, course_interest, classification, phone))
+                SET status = %s,
+                    "courseInterest" = COALESCE(%s, "courseInterest"),
+                    "lastActivityAt" = CURRENT_TIMESTAMP,
+                    "updatedAt" = CURRENT_TIMESTAMP
+                WHERE phone = %s OR phone = %s;
+            """, (new_status, course_interest, phone, cleaned_phone))
     except Exception as e:
         print(f"DB Error (update_lead_qualification): {e}")
     finally:
         conn.close()
 
-def save_call_log(phone: str, direction: str, duration: int, recording_url: str, transcript: str, summary: str):
-    """
-    Saves call log metadata and transcript into PostgreSQL calls table.
-    """
-    conn = get_connection()
-    if not conn:
-        print(f"Mock DB: Saving call log for {phone}: duration={duration}s")
-        return None
-
-    try:
-        lead = get_lead_by_phone(phone)
-        lead_id = lead["id"] if lead else None
-
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO calls (lead_id, direction, duration, recording_url, transcript, summary)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING *;
-            """, (lead_id, direction, duration, recording_url, transcript, summary))
-            row = cur.fetchone()
-            return dict(row) if row else None
-    except Exception as e:
-        print(f"DB Error (save_call_log): {e}")
-        return None
-    finally:
-        conn.close()
-
-# In-process fallback store, used only when DATABASE_URL is not configured
-# (e.g. local dev). Not safe across multiple Cloud Run instances.
+# In-process fallback store, used only when DATABASE_URL is not configured (local dev)
 _mock_conversation_sessions = {}
 
 def get_conversation_history(phone: str) -> list:
@@ -181,8 +456,9 @@ def get_conversation_history(phone: str) -> list:
         return _mock_conversation_sessions.get(phone, [])
 
     try:
+        cleaned_phone = clean_phone_number(phone)
         with conn.cursor() as cur:
-            cur.execute("SELECT history FROM conversation_sessions WHERE phone = %s;", (phone,))
+            cur.execute("SELECT history FROM conversation_sessions WHERE phone = %s OR phone = %s;", (phone, cleaned_phone))
             row = cur.fetchone()
             return row["history"] if row and row["history"] else []
     except Exception as e:
@@ -201,6 +477,7 @@ def save_conversation_history(phone: str, history: list, direction: str = None):
         return
 
     try:
+        cleaned_phone = clean_phone_number(phone)
         history_json = json.dumps(history)
         with conn.cursor() as cur:
             cur.execute("""
@@ -210,7 +487,7 @@ def save_conversation_history(phone: str, history: list, direction: str = None):
                 SET history = EXCLUDED.history,
                     direction = COALESCE(EXCLUDED.direction, conversation_sessions.direction),
                     updated_at = CURRENT_TIMESTAMP;
-            """, (phone, direction, history_json))
+            """, (cleaned_phone, direction, history_json))
     except Exception as e:
         print(f"DB Error (save_conversation_history): {e}")
     finally:
@@ -226,8 +503,9 @@ def clear_conversation_history(phone: str):
         return
 
     try:
+        cleaned_phone = clean_phone_number(phone)
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM conversation_sessions WHERE phone = %s;", (phone,))
+            cur.execute("DELETE FROM conversation_sessions WHERE phone = %s OR phone = %s;", (phone, cleaned_phone))
     except Exception as e:
         print(f"DB Error (clear_conversation_history): {e}")
     finally:
@@ -260,7 +538,6 @@ def match_documents(query_embedding: list, match_threshold: float = 0.5, match_c
     """
     conn = get_connection()
     if not conn:
-        # Mock knowledge response for fallback when DB is unconfigured
         return [
             {
                 "content": "Airborne Aviation Academy at Dwarka sector 7, Delhi offers DGCA CPL Ground Classes for 2,70,000 (2.7 Lakhs). Airbus A320 Simulator FBS training is 12,000. Captain Navrang Singh is the co-founder and head mentor.",
@@ -271,7 +548,6 @@ def match_documents(query_embedding: list, match_threshold: float = 0.5, match_c
     try:
         vector_str = "[" + ",".join(map(str, query_embedding)) + "]"
         with conn.cursor() as cur:
-            # Execute match_documents PL/pgSQL function or direct pgvector distance query
             cur.execute("""
                 SELECT id, content, metadata, 1 - (embedding <=> %s::vector) AS similarity
                 FROM documents

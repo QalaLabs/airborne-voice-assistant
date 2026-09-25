@@ -26,7 +26,7 @@ def send_whatsapp_message(phone: str, message: str) -> bool:
             }
         }
         try:
-            resp = requests.post(url, json=payload, headers=headers)
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
             if resp.status_code in [200, 201]:
                 print(f"WhatsApp Cloud API: Successfully sent message to {clean_phone}.")
                 return True
@@ -46,14 +46,18 @@ def send_whatsapp_message(phone: str, message: str) -> bool:
             "message": message
         }
         try:
-            response = requests.post(config.WHATSAPP_API_URL, json=payload, headers=headers)
+            response = requests.post(config.WHATSAPP_API_URL, json=payload, headers=headers, timeout=10)
             return response.status_code in [200, 201]
         except Exception as e:
             print(f"WhatsApp Custom API Error: {e}")
             return False
 
     # 3. Fallback / Mock Mode
-    print(f"WhatsApp Automation (Mock): Message to {phone}: '{message}'")
+    try:
+        print(f"WhatsApp Automation (Mock): Message to {phone}: '{message}'")
+    except UnicodeEncodeError:
+        safe_msg = message.encode("ascii", errors="replace").decode("ascii")
+        print(f"WhatsApp Automation (Mock): Message to {phone}: '{safe_msg}'")
     return True
 
 def trigger_post_call_automations(phone: str, classification: str, lead_name: str = "Future Pilot"):

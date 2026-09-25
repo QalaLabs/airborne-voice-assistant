@@ -16,7 +16,7 @@ else:
 if not config.GEMINI_API_KEY:
     print("Warning: GEMINI_API_KEY is not set.")
 
-def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "") -> str:
+def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
     """
     Integrates with Google Gemini API via REST requests to process conversations.
     This avoids dependencies on external SDK packages.
@@ -47,12 +47,16 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "")
         "parts": [{"text": prompt}]
     })
     
+    generation_config = {
+        "maxOutputTokens": 500 if json_mode else 150,
+        "temperature": 0.2 if json_mode else 0.7
+    }
+    if json_mode:
+        generation_config["responseMimeType"] = "application/json"
+
     payload = {
         "contents": contents,
-        "generationConfig": {
-            "maxOutputTokens": 150,
-            "temperature": 0.7
-        }
+        "generationConfig": generation_config
     }
     
     if system_prompt:
@@ -60,7 +64,7 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "")
             "parts": [{"text": system_prompt}]
         }
         
-    response = requests.post(url, json=payload, headers=headers)
+    response = requests.post(url, json=payload, headers=headers, timeout=10)
     response.raise_for_status()
     res_data = response.json()
     
@@ -72,15 +76,15 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "")
         print(f"Gemini Response Parsing Error: {e}, Response Body: {res_data}")
         raise e
 
-def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "") -> str:
+def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
     """
     Integrates with Gemini or OpenAI Chat Completion API to carry out conversational steps.
-    Keeps track of conversation history and system instructions.
+    Keeps track of conversation history and system instructions. Supports structured JSON mode.
     """
     # 1. Primary: Use Gemini if API Key is configured
     if config.GEMINI_API_KEY:
         try:
-            return chat_with_gemini(prompt, history, system_prompt)
+            return chat_with_gemini(prompt, history, system_prompt, json_mode=json_mode)
         except Exception as e:
             print(f"Gemini query failed ({e}). Attempting OpenAI / Mock fallback.")
 
@@ -95,17 +99,30 @@ def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "") ->
         messages.append({"role": "user", "content": prompt})
         
         try:
-            response = client.chat.completions.create(
-                model=config.OPENAI_MODEL,
-                messages=messages,
-                max_tokens=150,
-                temperature=0.7
-            )
+            kwargs = {
+                "model": config.OPENAI_MODEL,
+                "messages": messages,
+                "max_tokens": 500 if json_mode else 150,
+                "temperature": 0.2 if json_mode else 0.7
+            }
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+
+            response = client.chat.completions.create(**kwargs)
             return response.choices[0].message.content
         except Exception as e:
             print(f"OpenAI query failed: {e}")
             
     # 3. Tertiary Fallback: Mock Response
+    if json_mode:
+        return json.dumps({
+            "course_interest": "DGCA CPL Ground Classes",
+            "booking_intent": "Counselling Call",
+            "budget_status": "Ready",
+            "timeline_urgency": "Immediate",
+            "classification": "Hot"
+        })
+
     return (
         "Thank you for asking. Airborne Aviation Dwarka is Dwarka's leading ground classes school. "
         "Our Commercial Pilot License (CPL) program costs 2,70,000, and classes are mentored by Captain Navrang Singh."

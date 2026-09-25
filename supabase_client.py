@@ -9,6 +9,7 @@ save_lead = database.save_lead
 get_lead_by_phone = database.get_lead_by_phone
 update_lead_qualification = database.update_lead_qualification
 save_call_log = database.save_call_log
+record_call_outcome = database.record_call_outcome
 insert_document = database.insert_document
 match_documents = database.match_documents
 get_conversation_history = database.get_conversation_history
