@@ -388,18 +388,16 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
         
         # 2. Synchronize with external TeleCRM if configured
         lead_payload = {
-            "name": lead_name,
+            "name": resolved_name,
             "phone": phone,
             "course_interest": data["course_interest"],
             "classification": data["classification"],
-            "budget_status": data["budget_status"],
-            "timeline_urgency": data["timeline_urgency"],
             "recording_url": gcs_recording_url
         }
         crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
-        
+
         # 3. Trigger WhatsApp automated follow-up
-        automation.trigger_post_call_automations(phone, data["classification"], lead_name)
+        automation.trigger_post_call_automations(phone, data["classification"], resolved_name)
         
         # 4. Clear dialogue session
         clear_session(phone)
