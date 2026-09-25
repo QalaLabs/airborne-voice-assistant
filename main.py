@@ -433,7 +433,10 @@ async def telecmi_answer(request: Request):
 
         # Generate custom greeting audio
         if direction == "outbound":
-            greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
+            if "cabin" in course_interest.lower():
+                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in our {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
+            else:
+                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
         else:
             greeting_text = "Hello, I am Capt. Modassir, admissions advisor and pilot mentor at Airborne Aviation Academy Dwarka. May I know your good name, and which course or query are you calling about today?"
 

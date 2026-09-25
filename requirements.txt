@@ -27,6 +27,7 @@ google-cloud-aiplatform>=1.60.0
 
 # Telephony
 twilio>=8.10.0
+piopiy>=0.1.0
 
 # Database & Vectors
 psycopg2-binary>=2.9.9

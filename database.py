@@ -258,6 +258,35 @@ def save_lead(
         print("Mock DB: Saving lead:", name, phone, course, status)
         return {"id": "mock-lead-uuid-1234", "name": name, "phone": phone, "classification": status}
 
+    VALID_LEAD_STATUSES = {
+        'NEW', 'CONTACTED', 'INTERESTED', 'FOLLOW_UP', 'COUNSELED', 'APPLICATION_SUBMITTED', 
+        'CONVERTED', 'LOST', 'CONNECTED', 'CALL_BACK', 'PROSPECT', 'WON', 'NOT_CONNECTED', 
+        'RINGING', 'NOT_REACHABLE', 'SWITCHED_OFF', 'VOICEMAIL', 'INCOMING_BARD', 
+        'OUT_OF_SERVICE', 'NOT_AWARE', 'NOT_CONTACTABLE', 'LOCATION_OUT_OF_SCOPE', 
+        'LANGUAGE_BARRIER', 'PRICE_HIGH', 'JOINED_OTHERS', 'NOT_ELIGIBLE', 'INVALID_NUMBER', 
+        'TEST_LEAD', 'NOT_INTERESTED', 'REASON_NOT_SHARED', 'JOB_SEEKER'
+    }
+    VALID_LEAD_SOURCES = {
+        'HOMEPAGE_CTA', 'COURSE_PAGE', 'CONTACT_FORM', 'CALLBACK_REQUEST', 
+        'BROCHURE_DOWNLOAD', 'GOOGLE_ADS', 'FACEBOOK_ADS', 'ORGANIC', 'REFERRAL', 
+        'WHATSAPP', 'DIRECT'
+    }
+
+    clean_status = (status or "NEW").upper()
+    if clean_status not in VALID_LEAD_STATUSES:
+        clean_status = "NEW"
+
+    clean_source = (source or "DIRECT").upper()
+    if clean_source not in VALID_LEAD_SOURCES:
+        if "FACEBOOK" in clean_source:
+            clean_source = "FACEBOOK_ADS"
+        elif "GOOGLE" in clean_source:
+            clean_source = "GOOGLE_ADS"
+        elif "WHATSAPP" in clean_source:
+            clean_source = "WHATSAPP"
+        else:
+            clean_source = "DIRECT"
+
     try:
         cleaned_phone = clean_phone_number(phone)
         custom_fields_json = json.dumps(custom_fields or {})
@@ -297,7 +326,7 @@ def save_lead(
                     RETURNING *;
                 """, (
                     org_id, name or "New Lead", cleaned_phone, email, city, course, 
-                    status or "NEW", source or "VOICE_AGENT", custom_fields_json, custom_fields_json
+                    clean_status, clean_source, custom_fields_json, custom_fields_json
                 ))
                 inserted = cur.fetchone()
                 lead_id = inserted["id"] if inserted else None

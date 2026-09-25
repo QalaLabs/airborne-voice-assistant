@@ -37,8 +37,38 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
             caller_id = config.TELECMI_PHONE_NUMBER or "917943446755"
             app_id = config.TELECMI_PIOPIY_APP_ID
             
-            # ElevenLabs AI Voice Audio for Capt. Modassir
+            # Dynamic personalized greeting for the lead
             greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_modassir.mp3"
+            try:
+                import database
+                import assistant
+                lead = database.get_lead_by_phone(formatted_phone)
+                resolved_name = (lead.get("name") if lead else None) or lead_name or "Future Aviation Professional"
+                course_interest = (lead.get("course_interest") if lead else None) or "Aviation Programs"
+                source_str = ((lead.get("source") if lead else None) or "Facebook Ads").replace("_", " ").title()
+                
+                created_at = lead.get("created_at") if lead else None
+                if created_at:
+                    day = created_at.day
+                    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+                    lead_date_str = f"{day}{suffix} {created_at.strftime('%B')}"
+                else:
+                    lead_date_str = "recently"
+
+                if "cabin" in course_interest.lower():
+                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in our {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
+                else:
+                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
+
+                print(f"Telephony: Synthesizing personalized greeting: '{greeting_text}'")
+                greeting_url = assistant.get_greeting_voice_url(greeting_text)
+                database.save_conversation_history(
+                    formatted_phone,
+                    [{"role": "assistant", "content": greeting_text}],
+                    "outbound"
+                )
+            except Exception as ge:
+                print(f"Telephony: Notice generating custom greeting ({ge}), using default.")
 
             builder = piopiy.PipelineBuilder()
             builder.play(greeting_url)
@@ -69,11 +99,18 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
                 headers["Authorization"] = f"Bearer {config.TELECMI_TOKEN}"
                 headers["token"] = config.TELECMI_TOKEN
             
+            try:
+                from_num = int("".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755"))))
+                to_num = int("".join(filter(str.isdigit, str(telecmi_to))))
+            except Exception:
+                from_num = config.TELECMI_PHONE_NUMBER or "917943446755"
+                to_num = telecmi_to
+
             payload = {
                 "appid": config.TELECMI_APP_ID,
                 "secret": config.TELECMI_APP_SECRET,
-                "from": config.TELECMI_PHONE_NUMBER or "917943446755",
-                "to": telecmi_to,
+                "from": from_num,
+                "to": to_num,
                 "answer_url": answer_url
             }
             
