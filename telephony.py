@@ -35,7 +35,7 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
         try:
             client = piopiy.RestClient(token=config.TELECMI_TOKEN)
             caller_id = config.TELECMI_PHONE_NUMBER or "917943446755"
-            app_id = config.TELECMI_PIOPIY_APP_ID
+            app_id = config.TELECMI_PIOPIY_APP_ID or config.TELECMI_APP_ID
             
             # Dynamic personalized greeting for the lead
             greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_modassir.mp3"
