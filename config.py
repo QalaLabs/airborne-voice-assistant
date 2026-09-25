@@ -48,6 +48,9 @@ TELECMI_SIP_PASS = _clean_env("TELECMI_SIP_PASS", "")
 TELECMI_PHONE_NUMBER = _clean_env("TELECMI_PHONE_NUMBER", "")
 TELECMI_NAMESPACE_URL = _clean_env("TELECMI_NAMESPACE_URL", "qalalabs_airborne.piopiy.io")
 TELECMI_PIOPIY_APP_ID = _clean_env("TELECMI_PIOPIY_APP_ID", "e65072de-7571-4930-a51b-181fba552e7d")
+# Shared secret appended as ?token=... on the TeleCMI Debug/Event webhook URL to verify
+# incoming requests actually originate from TeleCMI. Leave unset to disable verification.
+TELECMI_WEBHOOK_TOKEN = _clean_env("TELECMI_WEBHOOK_TOKEN", "")
 
 
 # Booking & Automations Settings

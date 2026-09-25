@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from twilio.twiml.voice_response import VoiceResponse
 import uvicorn
 import os
+import hmac
 
 import config
 import database
@@ -535,6 +536,16 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
     """
     try:
         query_params = dict(request.query_params)
+
+        # Verify the shared webhook token (configured as ?token=... on the TeleCMI
+        # Debug/Event URL and/or an X-Webhook-Token header) so arbitrary callers can't
+        # forge call-outcome events and trigger CRM writes / post-call pipelines.
+        if config.TELECMI_WEBHOOK_TOKEN:
+            provided_token = query_params.get("token") or request.headers.get("x-webhook-token") or ""
+            if not hmac.compare_digest(provided_token, config.TELECMI_WEBHOOK_TOKEN):
+                print("TeleCMI Event Rejected: invalid or missing webhook token")
+                return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=401)
+
         body_data = {}
         content_type = request.headers.get("content-type", "")
         if "application/json" in content_type:
