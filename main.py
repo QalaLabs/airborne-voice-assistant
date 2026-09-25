@@ -325,7 +325,8 @@ def process_recording(
 # TeleCMI Voice API & SIP Trunk Endpoints
 # ==========================================
 
-@app.api_route("/telecmi/answer", methods=["GET", "POST"])
+@app.get("/telecmi/answer", operation_id="telecmi_answer_get")
+@app.post("/telecmi/answer", operation_id="telecmi_answer_post")
 async def telecmi_answer(request: Request):
     """
     TeleCMI PIOPIY Answer URL Webhook.
@@ -452,7 +453,8 @@ async def telecmi_answer(request: Request):
         print(f"TeleCMI Answer Error: {e}")
         return [{"action": "play", "file_name": get_greeting_voice_url("Welcome to Airborne Aviation Academy.")}]
 
-@app.api_route("/telecmi/process-recording", methods=["GET", "POST"])
+@app.get("/telecmi/process-recording", operation_id="telecmi_process_recording_get")
+@app.post("/telecmi/process-recording", operation_id="telecmi_process_recording_post")
 async def telecmi_process_recording(request: Request, background_tasks: BackgroundTasks):
     """
     Process caller recording from TeleCMI / PIOPIY, query RAG/LLM/TTS, and return next PCMO action.
@@ -525,8 +527,10 @@ async def telecmi_process_recording(request: Request, background_tasks: Backgrou
         ]
 
 
-@app.api_route("/telecmi/events", methods=["GET", "POST"])
-@app.api_route("/telecmi/debug", methods=["GET", "POST"])
+@app.get("/telecmi/events", operation_id="telecmi_events_get")
+@app.post("/telecmi/events", operation_id="telecmi_events_post")
+@app.get("/telecmi/debug", operation_id="telecmi_debug_get")
+@app.post("/telecmi/debug", operation_id="telecmi_debug_post")
 async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
     """
     TeleCMI Debug / Event URL Webhook.
