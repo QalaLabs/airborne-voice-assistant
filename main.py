@@ -28,7 +28,7 @@ def get_base_url(request: Request) -> str:
         return f"{proto}://{host}".rstrip("/")
     if config.NGROK_URL:
         return config.NGROK_URL.rstrip("/")
-    return "https://airborne-voice-assistant-hehklcowza-el.a.run.app"
+    return "https://airborne-voice-assistant-368523757732.asia-south1.run.app"
 
 WELCOME_MUSIC_URL = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/airborne_welcome_connecting.mp3"
 
