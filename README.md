@@ -131,6 +131,19 @@ python src/main.py  # Start the magic! ✨
 
 ---
 
+## ☁️ **Vertex AI Agent Engine (Gemini Enterprise Agent Platform)**
+
+The conversational-reasoning core can optionally run on Google's Vertex AI Agent Engine instead of the direct Gemini/OpenAI calls in `gpt_test.py`, while telephony (TeleCMI/Twilio), STT/TTS, guardrails, DB, and CRM stay on this Cloud Run service. This is off by default (`USE_AGENT_ENGINE=false`).
+
+**Deploy order matters** — deploy/update the ADK agent before enabling it on Cloud Run:
+
+1. `cd agent && ./deploy_agent.sh` — deploys the ADK agent to Agent Engine, prints its resource name. See `agent/README.md` for prerequisites and unverified-facts caveats.
+2. Set `AGENT_ENGINE_RESOURCE_NAME` in `deploy.sh`/`deploy.ps1` to that resource name.
+3. Create the `INTERNAL_RAG_SHARED_SECRET` secret (see comment in `deploy.sh`) so the agent's knowledge-lookup tool can call this service's `/internal/rag/query` endpoint.
+4. Deploy Cloud Run as usual (`./deploy.sh` or `.\deploy.ps1`) with `USE_AGENT_ENGINE` still `false`, verify the service, then flip it to `true` only after the verification steps in `agent/README.md` pass.
+
+---
+
 <div align="center">
 
 ## 🎪 **Features Showcase**

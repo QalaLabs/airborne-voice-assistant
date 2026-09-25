@@ -12,6 +12,17 @@ REGION="asia-south1"
 CLOUD_SQL_INSTANCE="airborne-aviation-505100:asia-south1:airborne-db"
 BUCKET_NAME="airborne-aviation-media-prod"
 
+# Vertex AI Agent Engine resource name (see agent/deploy_agent.sh). Deploy/
+# update the agent FIRST and paste its printed resource name here before
+# flipping USE_AGENT_ENGINE=true above. Leave empty until then -- the
+# service runs fine without it (falls back to the direct Gemini/OpenAI path).
+AGENT_ENGINE_RESOURCE_NAME=""
+
+# Requires a Secret Manager secret named INTERNAL_RAG_SHARED_SECRET (any
+# random string), used to authenticate the ADK agent's calls to this
+# service's new /internal/rag/query endpoint. Create it once with:
+#   echo -n "<random-secret>" | gcloud secrets create INTERNAL_RAG_SHARED_SECRET --data-file=- --project $PROJECT_ID
+
 echo "================================================="
 echo "Starting Cloud Run Deployment for $SERVICE_NAME"
 echo "Project: $PROJECT_ID | Region: $REGION"
@@ -35,8 +46,8 @@ gcloud run deploy $SERVICE_NAME \
     --max-instances 10 \
     --no-cpu-throttling \
     --add-cloudsql-instances $CLOUD_SQL_INSTANCE \
-    --set-env-vars "APP_URL=https://airborne-voice-assistant-hehklcowza-el.a.run.app,GCS_BUCKET_NAME=$BUCKET_NAME,GCP_PROJECT=$PROJECT_ID,GEMINI_MODEL=gemini-flash-latest,OPENAI_MODEL=gpt-4o-mini,ELEVENLABS_MODEL_ID=eleven_multilingual_v2,ELEVENLABS_VOICE_ID=eJTrVjiaPKqBMpMujQdM,TELECMI_SIP_USER=airborneaviation,TELECMI_NAMESPACE_URL=qalalabs_airborne.piopiy.io,CAMPUS_BOOKING_URL=https://calendly.com/airborne-aviation/campus-visit" \
-    --set-secrets "DATABASE_URL=DATABASE_URL:latest,TELECMI_APP_ID=TELECMI_APP_ID:latest,TELECMI_APP_SECRET=TELECMI_APP_SECRET:latest,TELECMI_TOKEN=TELECMI_TOKEN:latest,TELECMI_SIP_PASS=TELECMI_SIP_PASS:latest,ELEVENLABS_API_KEY=ELEVENLABS_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
+    --set-env-vars "APP_URL=https://airborne-voice-assistant-hehklcowza-el.a.run.app,GCS_BUCKET_NAME=$BUCKET_NAME,GCP_PROJECT=$PROJECT_ID,GCP_LOCATION=$REGION,GEMINI_MODEL=gemini-flash-latest,OPENAI_MODEL=gpt-4o-mini,ELEVENLABS_MODEL_ID=eleven_multilingual_v2,ELEVENLABS_VOICE_ID=eJTrVjiaPKqBMpMujQdM,TELECMI_SIP_USER=airborneaviation,TELECMI_NAMESPACE_URL=qalalabs_airborne.piopiy.io,CAMPUS_BOOKING_URL=https://calendly.com/airborne-aviation/campus-visit,USE_AGENT_ENGINE=false,AGENT_ENGINE_RESOURCE_NAME=$AGENT_ENGINE_RESOURCE_NAME" \
+    --set-secrets "DATABASE_URL=DATABASE_URL:latest,TELECMI_APP_ID=TELECMI_APP_ID:latest,TELECMI_APP_SECRET=TELECMI_APP_SECRET:latest,TELECMI_TOKEN=TELECMI_TOKEN:latest,TELECMI_SIP_PASS=TELECMI_SIP_PASS:latest,ELEVENLABS_API_KEY=ELEVENLABS_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,INTERNAL_RAG_SHARED_SECRET=INTERNAL_RAG_SHARED_SECRET:latest"
 
 # 3. Retrieve live service URL
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --project $PROJECT_ID --platform managed --region $REGION --format 'value(status.url)')
