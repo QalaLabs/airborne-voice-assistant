@@ -56,3 +56,27 @@ WHATSAPP_API_URL = _clean_env("WHATSAPP_API_URL", "")
 WHATSAPP_API_KEY = os.environ.get("WHATSAPP_API_KEY", "")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 
+# Google Cloud / Vertex AI Agent Engine Settings
+GCP_PROJECT = _clean_env("GCP_PROJECT", "")
+GCP_LOCATION = _clean_env("GCP_LOCATION", "asia-south1")
+# Resource name of the deployed ADK agent on Vertex AI Agent Engine, e.g.
+# "projects/<project>/locations/<location>/reasoningEngines/<id>" — populated
+# after running agent/deploy_agent.sh once. Empty/unset keeps the feature off.
+AGENT_ENGINE_RESOURCE_NAME = _clean_env("AGENT_ENGINE_RESOURCE_NAME", "")
+# Feature flag: route the conversational turn through the deployed Agent Engine
+# agent instead of the direct Gemini/OpenAI call in gpt_test.py. Defaults to
+# off so this ships inert; flip only after the verification steps in
+# agent/README.md pass. assistant.py always falls back to the direct LLM path
+# per-turn if the Agent Engine call fails, regardless of this flag.
+USE_AGENT_ENGINE = _clean_env("USE_AGENT_ENGINE", "false").lower() in ("1", "true", "yes")
+# Optional comma-separated allowlist of phone numbers to route through the
+# Agent Engine path even when USE_AGENT_ENGINE is false, for graduated
+# rollout/testing without flipping the global flag.
+AGENT_ENGINE_ROLLOUT_PHONES = {
+    p.strip() for p in _clean_env("AGENT_ENGINE_ROLLOUT_PHONES", "").split(",") if p.strip()
+}
+
+# Shared secret validated by the internal /internal/rag/query endpoint
+# (main.py), called by the ADK agent's search_knowledge tool (agent/rag_client.py).
+INTERNAL_RAG_SHARED_SECRET = _clean_env("INTERNAL_RAG_SHARED_SECRET", "")
+

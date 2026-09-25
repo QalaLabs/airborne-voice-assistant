@@ -19,6 +19,12 @@ edge-tts>=6.1.10
 # Google Cloud Platform (Cloud Storage & Cloud SQL)
 google-cloud-storage>=2.14.0
 
+# Vertex AI Agent Engine client (agent_client.py) -- only needed once
+# USE_AGENT_ENGINE is enabled. Package name/version UNVERIFIED (see plan's
+# "Unverified facts" section) -- confirm against current Agent Engine docs
+# before relying on this pin.
+google-cloud-aiplatform>=1.60.0
+
 # Telephony
 twilio>=8.10.0
 

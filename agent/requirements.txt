@@ -1,0 +1,12 @@
+# Dependencies for the standalone ADK agent deploy artifact (Agent Engine).
+# Deliberately excludes fastapi/uvicorn/twilio/psycopg2/pgvector/apscheduler/
+# edge-tts/SpeechRecognition -- none of that belongs in this deployable; it
+# stays in the repo root's requirements.txt for the Cloud Run service.
+#
+# VERIFICATION NEEDED: exact ADK package name/version. Candidates seen in
+# various ADK docs snapshots: "google-adk", "google-cloud-aiplatform[adk,agent_engines]".
+# Confirm against current docs before installing/deploying -- do not assume
+# the line below is correct as pinned.
+google-adk
+
+requests>=2.31.0

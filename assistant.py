@@ -9,6 +9,8 @@ import rag
 import supabase_client
 import crm_sync
 import automation
+import agent_client
+import config
 
 EXIT_PHRASES = ["goodbye", "thank you", "bye", "exit", "stop", "shukriya", "alvida"]
 
@@ -175,9 +177,20 @@ def handle_conversation(recording_url: str, phone: str, direction: str):
 
     # 8. LLM Generation with Sliding Context Window
     t_llm_start = time.time()
-    dynamic_system_prompt = f"{SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{context}"
     pruned_history = get_pruned_context(history, window_size=6)
-    ai_response = chat_with_gpt(caller_input, pruned_history, dynamic_system_prompt)
+
+    use_agent_engine = config.USE_AGENT_ENGINE or phone in config.AGENT_ENGINE_ROLLOUT_PHONES
+    ai_response = None
+    if use_agent_engine:
+        try:
+            ai_response = agent_client.query_agent(caller_input, pruned_history, phone, context)
+        except Exception as e:
+            print(f"Agent Engine query failed ({e}). Falling back to direct LLM path for this turn.")
+
+    if ai_response is None:
+        dynamic_system_prompt = f"{SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{context}"
+        ai_response = chat_with_gpt(caller_input, pruned_history, dynamic_system_prompt)
+
     ai_response = ai_response.replace("₹", "Rs. ")
     t_llm = time.time() - t_llm_start
     try:

@@ -7,6 +7,7 @@ import os
 
 import config
 import database
+import rag
 import scheduler
 import supabase_client
 from assistant import handle_conversation, get_greeting_voice_url, run_post_call_pipeline
@@ -170,6 +171,39 @@ async def root_status(request: Request):
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
+
+@app.post("/internal/rag/query")
+async def internal_rag_query(request: Request):
+    """
+    Internal-only knowledge lookup endpoint, called by the ADK agent's
+    search_knowledge tool (agent/rag_client.py) when the conversational core
+    is deployed on Vertex AI Agent Engine (config.USE_AGENT_ENGINE / the
+    per-phone rollout allowlist). Thin wrapper around rag.query_rag() so RAG
+    logic and its pgvector/Cloud SQL connection stay canonical in Cloud Run.
+
+    Auth: requires header 'X-Internal-Secret' matching config.INTERNAL_RAG_SHARED_SECRET.
+    If that secret is unset, the endpoint refuses all requests (fails closed)
+    rather than silently running unauthenticated.
+    """
+    if not config.INTERNAL_RAG_SHARED_SECRET:
+        return JSONResponse({"error": "internal RAG endpoint not configured"}, status_code=503)
+
+    provided_secret = request.headers.get("x-internal-secret", "")
+    if provided_secret != config.INTERNAL_RAG_SHARED_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    query = (data.get("query") or "").strip()
+    if not query:
+        return JSONResponse({"error": "missing 'query'"}, status_code=400)
+
+    limit = int(data.get("limit", 3))
+    context = rag.query_rag(query, limit=limit)
+    return JSONResponse({"context": context})
 
 @app.get("/webhooks/new-lead")
 async def get_new_lead_webhook_info():
