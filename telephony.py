@@ -34,7 +34,11 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
     if config.TELECMI_TOKEN and piopiy:
         try:
             client = piopiy.RestClient(token=config.TELECMI_TOKEN)
-            caller_id = config.TELECMI_PHONE_NUMBER or "917943446755"
+            raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "7943446755")))
+            if len(raw_caller) == 12 and raw_caller.startswith("91"):
+                caller_id = raw_caller[2:]
+            else:
+                caller_id = raw_caller or "7943446755"
             app_id = config.TELECMI_PIOPIY_APP_ID or config.TELECMI_APP_ID
             
             # Dynamic personalized greeting for the lead
