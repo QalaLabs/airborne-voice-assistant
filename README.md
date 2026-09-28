@@ -144,6 +144,19 @@ The conversational-reasoning core can optionally run on Google's Vertex AI Agent
 
 ---
 
+## 📞 **TeleCMI Telephony Troubleshooting**
+
+**`TELECMI_SIP_USER`/`TELECMI_SIP_PASS` are dead config as of the PioPiy SDK migration (PR #4).** They're still defined in `config.py` and set in `deploy.sh`/`deploy.ps1`, but nothing in the application code (`telephony.py`, `main.py`, `assistant.py`) reads them — a SIP trunk credential mismatch is **not** a plausible cause of call-routing failures anymore. Don't spend time re-checking or rotating those two secrets for a "call cannot be connected" issue; they can likely be removed in a future cleanup once confirmed unused elsewhere.
+
+**Current auth/routing model** (see `telephony.py`):
+- **Outbound calls**: PioPiy SDK (`piopiy.RestClient(token=config.TELECMI_TOKEN)`), using `TELECMI_TOKEN` + `TELECMI_PIOPIY_APP_ID` + `TELECMI_PHONE_NUMBER` as caller ID. Falls back to the legacy TeleCMI REST API (`TELECMI_APP_ID` + `TELECMI_APP_SECRET`) if the SDK path fails, then to Twilio, then to a simulation-mode log.
+- **Inbound calls**: routed entirely via the `/telecmi/answer` webhook (PCMO JSON responses) — configure TeleCMI/PIOPIY's dashboard **Answer URL** to `https://<cloud-run-url>/telecmi/answer` (not `/answer-call`, which is Twilio-only and returns TwiML, not PCMO) and **Debug URL** to `/telecmi/events`.
+- The `/telecmi/events` webhook now validates a `?token=...` query param against `TELECMI_WEBHOOK_TOKEN` (see PR #5) when that env var is set — leave it unset to disable verification if TeleCMI's dashboard can't be configured to send it.
+
+If a call still fails with "we regret the call cannot be connected" after confirming the Answer/Debug URLs above: check `TELECMI_TOKEN`, `TELECMI_APP_ID`/`TELECMI_APP_SECRET`, `TELECMI_PIOPIY_APP_ID`, and `TELECMI_PHONE_NUMBER` against what TeleCMI's dashboard issues for this account, and check TeleCMI's own "CALL DETAILS" tab for the carrier-level rejection reason (account balance, number provisioning, etc. — these live outside this codebase entirely).
+
+---
+
 <div align="center">
 
 ## 🎪 **Features Showcase**
