@@ -36,10 +36,11 @@ def speak_and_get_url(text: str) -> str:
     fname = f"resp_{uuid.uuid4().hex}.mp3"
     blob_name = f"tts-audio/{fname}"
     
-    # Check if ElevenLabs is configured
+    # Check if ElevenLabs is configured and explicitly enabled
+    use_elevenlabs = getattr(config, "USE_ELEVENLABS", False)
     api_key = (config.ELEVENLABS_API_KEY or "").strip()
     voice_id = (config.ELEVENLABS_VOICE_ID or "").strip() or "eJTrVjiaPKqBMpMujQdM"
-    if api_key and voice_id:
+    if use_elevenlabs and api_key and voice_id:
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         headers = {
             "xi-api-key": api_key,

@@ -30,18 +30,26 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
             
     print(f"Telephony: Initiating outbound call to {lead_name} at {formatted_phone}...")
     
-    # 1. PioPiy Modern SDK (Primary)
-    if config.TELECMI_TOKEN and piopiy:
+    # 1. Piopiy PCMO Developer App (Primary using app_id e65072de and Token)
+    app_id = (
+        getattr(config, "AGENT_ID", "")
+        or config.TELECMI_PIOPIY_APP_ID
+        or config.TELECMI_APP_ID
+        or "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
+    )
+    token = getattr(config, "AGENT_TOKEN", "") or config.TELECMI_TOKEN or ""
+
+    if token and app_id:
         try:
-            client = piopiy.RestClient(token=config.TELECMI_TOKEN)
-            raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "7943446755")))
-            if len(raw_caller) == 12 and raw_caller.startswith("91"):
-                caller_id = raw_caller[2:]
+            from piopiy.voice import RestClient
+            client = RestClient(token=token)
+            raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755")))
+            if len(raw_caller) == 10:
+                caller_id = "91" + raw_caller
             else:
-                caller_id = raw_caller or "7943446755"
-            app_id = config.TELECMI_PIOPIY_APP_ID or config.TELECMI_APP_ID
-            
-            # Dynamic personalized greeting for the lead
+                caller_id = raw_caller or "917943446755"
+
+            # Dynamic personalized greeting audio for the lead
             greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_modassir.mp3"
             try:
                 import database
@@ -74,21 +82,44 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
             except Exception as ge:
                 print(f"Telephony: Notice generating custom greeting ({ge}), using default.")
 
-            builder = piopiy.PipelineBuilder()
-            builder.play(greeting_url)
-            builder.record()
-            pipeline = builder.build()
-            
-            res = client.pcmo.call(
-                caller_id=caller_id,
-                to_number=telecmi_to,
-                app_id=app_id,
-                pipeline=pipeline
-            )
-            print(f"Telephony: PioPiy outbound call dispatched: {res}")
-            return True
+            base_url = (getattr(config, "APP_URL", "") or getattr(config, "NGROK_URL", "") or "https://airborne-voice-assistant-368523757732.asia-south1.run.app").rstrip("/")
+            action_url = f"{base_url}/telecmi/process-recording?phone={telecmi_to}&direction=outbound"
+            pipeline = [
+                {
+                    "action": "play_get_input",
+                    "prompt": {
+                        "type": "file",
+                        "file_name": greeting_url
+                    },
+                    "input": ["speech", "dtmf"],
+                    "on_result": {
+                        "type": "url",
+                        "url": action_url
+                    }
+                }
+            ]
+
+            print(f"Telephony: Dispatching Piopiy call (caller_id={caller_id}, to={telecmi_to}, agent/app_id={app_id})...")
+            try:
+                res = client.pcmo.call(
+                    caller_id=caller_id,
+                    to_number=telecmi_to,
+                    app_id=app_id,
+                    pipeline=pipeline
+                )
+                print(f"Telephony: PioPiy PCMO call dispatched: {res}")
+                return True
+            except Exception as pcmo_err:
+                print(f"Telephony: PCMO dispatch failed ({pcmo_err}), attempting client.ai.call...")
+                res = client.ai.call(
+                    caller_id=caller_id,
+                    to_number=telecmi_to,
+                    agent_id=app_id
+                )
+                print(f"Telephony: PioPiy AI call dispatched: {res}")
+                return True
         except Exception as e:
-            print(f"Telephony Error: PioPiy SDK dispatch error: {e}")
+            print(f"Telephony Error: PioPiy dispatch error: {e}")
 
     # 1b. TeleCMI Legacy REST API fallback
     if config.TELECMI_APP_ID and config.TELECMI_APP_SECRET:

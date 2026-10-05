@@ -87,19 +87,56 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
     if last_err:
         raise last_err
 
+def chat_with_vertex_ai(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
+    """
+    Calls Gemini on Google Cloud Vertex AI using Application Default Credentials (ADC).
+    """
+    from google import genai
+    from google.genai import types
+    project = getattr(config, "GCP_PROJECT", "airborne-aviation-505100")
+    location = getattr(config, "GCP_LOCATION", "asia-south1")
+    genai_client = genai.Client(vertexai=True, project=project, location=location)
+
+    contents = []
+    if history:
+        for msg in history:
+            role = "model" if msg["role"] == "assistant" else "user"
+            if msg["role"] in ["user", "assistant"]:
+                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
+
+    config_params = types.GenerateContentConfig(
+        system_instruction=system_prompt if system_prompt else None,
+        temperature=0.2 if json_mode else 0.7,
+        max_output_tokens=500 if json_mode else 300,
+        response_mime_type="application/json" if json_mode else None
+    )
+    resp = genai_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=contents,
+        config=config_params
+    )
+    return resp.text
+
 def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
     """
     Integrates with Gemini or OpenAI Chat Completion API to carry out conversational steps.
     Keeps track of conversation history and system instructions. Supports structured JSON mode.
     """
-    # 1. Primary: Use Gemini if API Key is configured
+    # 1. Primary: Use Gemini Studio if API Key is configured
     if config.GEMINI_API_KEY:
         try:
             return chat_with_gemini(prompt, history, system_prompt, json_mode=json_mode)
         except Exception as e:
-            print(f"Gemini query failed ({e}). Attempting OpenAI / Mock fallback.")
+            print(f"Gemini Studio failed ({e}). Trying Vertex AI...")
 
-    # 2. Secondary: Fallback to OpenAI if configured
+    # 2. Secondary: Vertex AI via Google Cloud ADC (billed to GCP project)
+    try:
+        return chat_with_vertex_ai(prompt, history, system_prompt, json_mode=json_mode)
+    except Exception as e:
+        print(f"Vertex AI query failed: {e}")
+
+    # 3. Tertiary: Fallback to OpenAI if configured
     if client:
         messages = []
         if system_prompt:

@@ -453,8 +453,8 @@ async def telecmi_answer(request: Request):
             )
 
         # PCMO response for TeleCMI / PIOPIY:
-        # Inbound: plays hold music & announcement first ("Welcome to Airborne Aviation..."), then agent intro, then records.
-        # Outbound: plays personalized lead greeting, then records.
+        # Inbound: plays hold music & announcement first ("Welcome to Airborne Aviation..."), then agent intro, then gets speech input.
+        # Outbound: plays personalized lead greeting via play_get_input, then gets speech input.
         action_url = f"{base_url}/telecmi/process-recording?phone={caller_phone}&direction={direction}"
         if direction == "inbound":
             pcmo_response = [
@@ -463,27 +463,31 @@ async def telecmi_answer(request: Request):
                     "file_name": WELCOME_MUSIC_URL
                 },
                 {
-                    "action": "play",
-                    "file_name": greeting_url
-                },
-                {
-                    "action": "record",
-                    "action_url": action_url,
-                    "max_length": 15,
-                    "timeout": 3
+                    "action": "play_get_input",
+                    "prompt": {
+                        "type": "file",
+                        "file_name": greeting_url
+                    },
+                    "input": ["speech", "dtmf"],
+                    "on_result": {
+                        "type": "url",
+                        "url": action_url
+                    }
                 }
             ]
         else:
             pcmo_response = [
                 {
-                    "action": "play",
-                    "file_name": greeting_url
-                },
-                {
-                    "action": "record",
-                    "action_url": action_url,
-                    "max_length": 15,
-                    "timeout": 3
+                    "action": "play_get_input",
+                    "prompt": {
+                        "type": "file",
+                        "file_name": greeting_url
+                    },
+                    "input": ["speech", "dtmf"],
+                    "on_result": {
+                        "type": "url",
+                        "url": action_url
+                    }
                 }
             ]
         return pcmo_response
@@ -527,6 +531,19 @@ async def telecmi_process_recording(request: Request, background_tasks: Backgrou
         )
         caller_phone = str(raw_phone).strip() or "guest"
         direction = data.get("direction", "inbound")
+        raw_speech = (
+            data.get("speech") or 
+            data.get("transcript") or 
+            data.get("text") or 
+            data.get("digit") or 
+            data.get("digits") or 
+            data.get("dtmf") or 
+            ""
+        )
+        if isinstance(raw_speech, dict):
+            caller_speech = raw_speech.get("text") or raw_speech.get("transcript") or raw_speech.get("speech") or str(raw_speech)
+        else:
+            caller_speech = str(raw_speech)
         recording_url = (
             data.get("record_url") or 
             data.get("recording_url") or 
@@ -536,7 +553,7 @@ async def telecmi_process_recording(request: Request, background_tasks: Backgrou
 
         import anyio
         audio_url, should_hang_up = await anyio.to_thread.run_sync(
-            handle_conversation, recording_url, caller_phone, direction
+            handle_conversation, recording_url, caller_phone, direction, caller_speech
         )
 
         if should_hang_up:
@@ -549,12 +566,17 @@ async def telecmi_process_recording(request: Request, background_tasks: Backgrou
         else:
             action_url = f"{base_url}/telecmi/process-recording?phone={caller_phone}&direction={direction}"
             return [
-                {"action": "play", "file_name": audio_url},
                 {
-                    "action": "record",
-                    "action_url": action_url,
-                    "max_length": 15,
-                    "timeout": 3
+                    "action": "play_get_input",
+                    "prompt": {
+                        "type": "file",
+                        "file_name": audio_url
+                    },
+                    "input": ["speech", "dtmf"],
+                    "on_result": {
+                        "type": "url",
+                        "url": action_url
+                    }
                 }
             ]
     except Exception as e:

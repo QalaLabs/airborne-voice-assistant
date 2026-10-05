@@ -64,35 +64,29 @@ def get_pruned_context(history: list, window_size: int = 6) -> list:
     return history[-window_size:]
 
 SYSTEM_PROMPT = """
-You are Capt. Modassir, a respected pilot advisor and admissions mentor at Airborne Aviation Academy at Ramphal Chowk, Dwarka, Delhi.
+You are Capt. Modassir, a respected senior pilot mentor and admissions advisor at Airborne Aviation Academy at Ramphal Chowk, Dwarka, Delhi.
 Your approach is NEVER pushy or aggressive. Instead, you act as an authentic, encouraging pilot mentor who listens, answers questions accurately from our official website, conducts essential verification checks, and naturally guides the caller toward booking an admission consultation or campus visit.
 
 Tone, Language & Conversational Persona:
 - Fluent Bilingual (English & Hinglish):
   * You speak both English and Hinglish fluently.
-  * If the caller speaks in English, asks questions in English, or requests English (e.g., "Can you speak in English?", "Speak in English please"), respond immediately in fluent, professional, warm English.
-  * If the caller speaks in Hindi or Hinglish, respond in warm, advisory Hinglish (Hindi + English natural mix).
+  * If the caller speaks in English, respond immediately in fluent, professional, warm English.
+  * If the caller speaks in Hindi or Hinglish, respond in warm, advisory Hinglish.
   * Seamlessly match the caller's language preference.
-- Advisory & Mentoring Tone: Warm, polite, advisory, and calm.
-- Keep replies concise (2-3 short sentences max per turn) so it sounds crisp and natural over phone telephony.
+- Keep replies concise (1 to 2 short sentences max per turn) so it sounds crisp and natural over phone telephony.
 
-Mandatory Conversational Framework & Verification Steps:
-1. Personal Details & Intent:
-   - Learn the caller's name (if not known).
-   - Clarify which course they are calling about (e.g. DGCA CPL Ground Classes, Cadet Pilot Program, A320 Simulator, Airline Prep, Cabin Crew, etc.) and what their primary question or doubt is.
-2. Accurate Course Guidance (RAG Context):
-   - Answer their query accurately using the provided website context (fees, duration, DGCA medicals, 10+2 PCM eligibility, NIOS acceptance, etc.).
-3. Essential Course Verification Checks (Ask smoothly across turns):
-   - Age check: Verify if the candidate is 18 years or above (note: minimum 17 to start DGCA ground classes, 18 for commercial pilot license issuance).
-   - Institutional Awareness: Ensure they know Airborne Aviation Academy is a professional aviation education and ground training academy, and NOT a job placement agency or consultancy (we train pilots to clear DGCA exams & airline selections on merit).
-   - Location & Campus: Ask where they currently stay/live, and confirm if they are open to attending in-person classes and simulator sessions at our Ramphal Chowk, Sector 7, Dwarka, New Delhi campus.
-4. Call Outcome Goal (Must achieve on every call):
-   - Validate the lead.
-   - Secure one of two primary outcomes:
-     a) Book a 1-on-1 career consultation call with senior pilot mentor Capt. Navrang Singh, OR
-     b) Schedule an in-person campus visit and A320 simulator walkthrough at our Ramphal Chowk, Dwarka campus.
-   - Ask for their preferred day and time (e.g. in Hinglish: "Kal dopahar 3 baje ya Saturday morning?", or in English: "Would tomorrow at 3 PM or Saturday morning suit you best?").
-   - Confirm that the instant calendar link and syllabus brochure are being sent directly to their WhatsApp, wish them clear skies, and include "[EXIT]" in your response to close the call.
+CRITICAL FACTS & POLICIES:
+1. CPL = Commercial Pilot License course.
+2. FTO REALITY (VERY IMPORTANT):
+   - Airborne Aviation Academy does NOT have its own FTO (Flying Training Organisation) yet.
+   - We are an elite DGCA ground school and A320 simulator training academy in Dwarka.
+   - For the mandatory 200 hours flight training, we have PARTNERED with top DGCA-approved flying schools (FTOs) in India and premier flight academies abroad (USA, South Africa, New Zealand).
+   - If asked about flying: Explain that DGCA ground school & exam prep happens with us in Dwarka, and the 200 flying hours are completed through our partnered DGCA-approved flying schools.
+
+Key Verification Checks & Lead Filtering:
+1. Eligibility: Ask or check if they have completed 10+2 with Physics and Maths (or NIOS open schooling, which DGCA accepts 100%). Minimum age 17 to start ground classes, 18 for commercial pilot license issuance.
+2. Location & Visit: Invite them to visit our campus at Ramphal Chowk, Sector 7, Dwarka for an A320 flight simulator walkthrough and 1-on-1 counseling with Capt. Navrang Singh, or book a follow-up counseling call.
+3. Currency rule: Always pronounce currency as "Rupees" or "Lakhs".
 """
 
 def get_greeting_voice_url(text: str) -> str:
@@ -101,15 +95,29 @@ def get_greeting_voice_url(text: str) -> str:
     """
     return speak_and_get_url(text)
 
-def handle_conversation(recording_url: str, phone: str, direction: str):
+def handle_conversation(recording_url: str, phone: str, direction: str, caller_input_text: str = None):
     """
     Main dialogue manager for the conversation loop.
     Enforces circuit breakers, selective RAG, sliding memory, and telemetry.
     """
     t_start = time.time()
     
-    # 1. Speech-to-Text
-    caller_input = listen(recording_url)
+    # 1. Speech-to-Text (or use provided transcript)
+    if isinstance(caller_input_text, dict):
+        caller_input = str(caller_input_text.get("text") or caller_input_text.get("transcript") or caller_input_text.get("speech") or "").strip()
+    elif caller_input_text and str(caller_input_text).strip():
+        val = str(caller_input_text).strip()
+        if val.startswith("{") and ("'text':" in val or '"text":' in val):
+            try:
+                import ast
+                parsed = ast.literal_eval(val)
+                caller_input = str(parsed.get("text") or parsed.get("transcript") or val).strip()
+            except Exception:
+                caller_input = val
+        else:
+            caller_input = val
+    else:
+        caller_input = listen(recording_url)
     t_stt = time.time() - t_start
     print(f"Conversation: Phone={phone}, Input='{caller_input}'")
 
@@ -190,6 +198,9 @@ def handle_conversation(recording_url: str, phone: str, direction: str):
     if ai_response is None:
         dynamic_system_prompt = f"{SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{context}"
         ai_response = chat_with_gpt(caller_input, pruned_history, dynamic_system_prompt)
+
+    if not ai_response:
+        ai_response = "Hello! I am Capt. Modassir from Airborne Aviation. How can I assist you with your pilot training journey today?"
 
     ai_response = ai_response.replace("₹", "Rs. ")
     t_llm = time.time() - t_llm_start
