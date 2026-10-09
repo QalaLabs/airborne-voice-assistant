@@ -116,13 +116,18 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
                 }
             ]
 
+            clean_variables = {
+                k: str(v) for k, v in (dossier.to_dict() if dossier else {}).items() 
+                if v and k not in ["created_at"]
+            }
+
             print(f"Telephony: Dispatching Piopiy AI call (caller_id={caller_id}, to={telecmi_to}, agent_id={app_id})...")
             try:
                 res = client.ai.call(
                     caller_id=caller_id,
                     to_number=telecmi_to,
                     agent_id=app_id,
-                    variables=dossier.to_dict()
+                    variables=clean_variables
                 )
                 print(f"Telephony: PioPiy AI call dispatched with pre-call variables: {res}")
                 return True
@@ -146,7 +151,8 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
     # 1b. TeleCMI Legacy REST API fallback
     if config.TELECMI_APP_ID and config.TELECMI_APP_SECRET:
         try:
-            answer_url = f"{config.NGROK_URL}/telecmi/answer?direction=outbound&phone={formatted_phone}"
+            base_url = (getattr(config, "APP_URL", "") or getattr(config, "NGROK_URL", "") or "https://airborne-voice-assistant-hehklcowza-el.a.run.app").rstrip("/")
+            answer_url = f"{base_url}/telecmi/answer?direction=outbound&phone={formatted_phone}"
             telecmi_api_url = "https://rest.telecmi.com/v2/make_call"
             
             headers = {

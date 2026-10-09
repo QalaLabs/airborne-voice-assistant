@@ -122,10 +122,21 @@ class FastStreamingElevenLabsTTS(TTSService):
         self._voice_id = voice_id
         self._sample_rate = sample_rate
         self._model_id = getattr(config, "ELEVENLABS_MODEL_ID", "eleven_flash_v2_5") or "eleven_flash_v2_5"
-        import httpx
-        limits = httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=120.0)
-        self._client = httpx.AsyncClient(limits=limits, timeout=15.0)
+        self._client = None
+        self._loop = None
         self._cached_pcm = {}
+
+    def _get_client(self):
+        import httpx
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if self._client is None or self._loop != current_loop or getattr(self._client, "is_closed", False):
+            self._loop = current_loop
+            limits = httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=120.0)
+            self._client = httpx.AsyncClient(limits=limits, timeout=15.0)
+        return self._client
 
     async def prewarm_greeting(self, text: str):
         """Pre-synthesizes and caches greeting PCM in memory for instant 0ms pickup."""
@@ -137,7 +148,8 @@ class FastStreamingElevenLabsTTS(TTSService):
             headers = {"xi-api-key": self._api_key, "Content-Type": "application/json", "Accept": "audio/pcm"}
             payload = {"text": clean_text, "model_id": self._model_id}
             chunks = []
-            async with self._client.stream("POST", url, headers=headers, json=payload) as resp:
+            client = self._get_client()
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
                 if resp.status_code == 200:
                     async for chunk in resp.aiter_bytes(chunk_size=960):
                         chunks.append(chunk)
@@ -179,7 +191,8 @@ class FastStreamingElevenLabsTTS(TTSService):
                         "similarity_boost": 0.75
                     }
                 }
-                async with self._client.stream("POST", url, headers=headers, json=payload) as resp:
+                client = self._get_client()
+                async with client.stream("POST", url, headers=headers, json=payload) as resp:
                     if resp.status_code == 200:
                         async for chunk in resp.aiter_bytes(chunk_size=960):
                             yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)

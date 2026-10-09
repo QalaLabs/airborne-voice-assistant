@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS documents (
     embedding VECTOR(1536)
 );
 
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS embedding VECTOR(1536);
+
 -- Index for HNSW similarity search on embeddings
 CREATE INDEX IF NOT EXISTS documents_embedding_idx ON documents 
 USING hnsw (embedding vector_cosine_ops);

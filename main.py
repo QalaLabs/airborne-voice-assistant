@@ -591,6 +591,30 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
             if caller_phone != "guest":
                 background_tasks.add_task(supabase_client.save_conversation_history, caller_phone, [{"role": "assistant", "content": greeting_text}], direction)
 
+        # 1. PioPiy AI Agent Mode (Ultra-low-latency WebRTC worker)
+        agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "") or "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
+        raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755")))
+        caller_id = raw_caller if len(raw_caller) > 10 else f"91{raw_caller}"
+
+        if agent_id:
+            pcmo_response = [
+                {
+                    "action": "connect",
+                    "params": {
+                        "caller_id": caller_id
+                    },
+                    "endpoints": [
+                        {
+                            "type": "agent",
+                            "id": agent_id
+                        }
+                    ]
+                }
+            ]
+            print(f"TeleCMI Answer: Bridging call to PioPiy AI Agent {agent_id} (caller={caller_phone})")
+            return pcmo_response
+
+        # 2. Legacy Turn-by-Turn IVR Fallback
         action_url = f"{base_url}/telecmi/process-recording?phone={caller_phone}&direction={direction}"
         pcmo_response = [
             {
