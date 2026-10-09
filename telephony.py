@@ -50,7 +50,7 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
                 caller_id = raw_caller or "917943446755"
 
             # Dynamic personalized greeting audio for the lead
-            greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_modassir.mp3"
+            greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_navrang.mp3"
             try:
                 import database
                 import assistant
@@ -68,9 +68,9 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
                     lead_date_str = "recently"
 
                 if "cabin" in course_interest.lower():
-                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in our {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
+                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in our {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
                 else:
-                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
+                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
 
                 print(f"Telephony: Synthesizing personalized greeting: '{greeting_text}'")
                 greeting_url = assistant.get_greeting_voice_url(greeting_text)
@@ -99,18 +99,8 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
                 }
             ]
 
-            print(f"Telephony: Dispatching Piopiy call (caller_id={caller_id}, to={telecmi_to}, agent/app_id={app_id})...")
+            print(f"Telephony: Dispatching Piopiy AI call (caller_id={caller_id}, to={telecmi_to}, agent_id={app_id})...")
             try:
-                res = client.pcmo.call(
-                    caller_id=caller_id,
-                    to_number=telecmi_to,
-                    app_id=app_id,
-                    pipeline=pipeline
-                )
-                print(f"Telephony: PioPiy PCMO call dispatched: {res}")
-                return True
-            except Exception as pcmo_err:
-                print(f"Telephony: PCMO dispatch failed ({pcmo_err}), attempting client.ai.call...")
                 res = client.ai.call(
                     caller_id=caller_id,
                     to_number=telecmi_to,
@@ -118,6 +108,20 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
                 )
                 print(f"Telephony: PioPiy AI call dispatched: {res}")
                 return True
+            except Exception as ai_err:
+                print(f"Telephony: AI call failed ({ai_err}), attempting client.pcmo.call fallback...")
+                try:
+                    res = client.pcmo.call(
+                        caller_id=caller_id,
+                        to_number=telecmi_to,
+                        app_id=app_id,
+                        pipeline=pipeline
+                    )
+                    print(f"Telephony: PioPiy PCMO call dispatched: {res}")
+                    return True
+                except Exception as pcmo_err:
+                    print(f"Telephony: PCMO dispatch also failed: {pcmo_err}")
+                    raise
         except Exception as e:
             print(f"Telephony Error: PioPiy dispatch error: {e}")
 

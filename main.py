@@ -290,9 +290,12 @@ async def answer_call(
 
     # Generate custom greeting audio URL
     if direction == "outbound":
-        greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
+        greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
     else:
-        greeting_text = "Hello, I am Capt. Modassir, admissions advisor and pilot mentor at Airborne Aviation Academy Dwarka. May I know your good name, and which course or query are you calling about today?"
+        if lead_name and lead_name not in ["Future Pilot", "Inbound Lead", "Inbound Caller", "New Lead", "TeleCMI Inbound Lead"]:
+            greeting_text = f"Hello {lead_name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+        else:
+            greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Mentor. May I know your good name, and which course or query are you calling about today?"
         
     greeting_url = get_greeting_voice_url(greeting_text)
     
@@ -436,11 +439,14 @@ async def telecmi_answer(request: Request):
         # Generate custom greeting audio
         if direction == "outbound":
             if "cabin" in course_interest.lower():
-                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in our {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
+                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in our {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
             else:
-                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Capt. Modassir from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
+                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
         else:
-            greeting_text = "Hello, I am Capt. Modassir, admissions advisor and pilot mentor at Airborne Aviation Academy Dwarka. May I know your good name, and which course or query are you calling about today?"
+            if lead_name and lead_name not in ["Future Pilot", "TeleCMI Inbound Lead", "Inbound Caller", "New Lead", "Inbound Lead"]:
+                greeting_text = f"Hello {lead_name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+            else:
+                greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Mentor. May I know your good name, and which course or query are you calling about today?"
 
         greeting_url = get_greeting_voice_url(greeting_text)
 
@@ -456,40 +462,20 @@ async def telecmi_answer(request: Request):
         # Inbound: plays hold music & announcement first ("Welcome to Airborne Aviation..."), then agent intro, then gets speech input.
         # Outbound: plays personalized lead greeting via play_get_input, then gets speech input.
         action_url = f"{base_url}/telecmi/process-recording?phone={caller_phone}&direction={direction}"
-        if direction == "inbound":
-            pcmo_response = [
-                {
-                    "action": "play",
-                    "file_name": WELCOME_MUSIC_URL
+        pcmo_response = [
+            {
+                "action": "play_get_input",
+                "prompt": {
+                    "type": "file",
+                    "file_name": greeting_url
                 },
-                {
-                    "action": "play_get_input",
-                    "prompt": {
-                        "type": "file",
-                        "file_name": greeting_url
-                    },
-                    "input": ["speech", "dtmf"],
-                    "on_result": {
-                        "type": "url",
-                        "url": action_url
-                    }
+                "input": ["speech", "dtmf"],
+                "on_result": {
+                    "type": "url",
+                    "url": action_url
                 }
-            ]
-        else:
-            pcmo_response = [
-                {
-                    "action": "play_get_input",
-                    "prompt": {
-                        "type": "file",
-                        "file_name": greeting_url
-                    },
-                    "input": ["speech", "dtmf"],
-                    "on_result": {
-                        "type": "url",
-                        "url": action_url
-                    }
-                }
-            ]
+            }
+        ]
         return pcmo_response
     except Exception as e:
         print(f"TeleCMI Answer Error: {e}")

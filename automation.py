@@ -69,7 +69,7 @@ def trigger_post_call_automations(phone: str, classification: str, lead_name: st
     if classification == "Hot":
         # Send Calendly booking link for Dwarka Campus Visit
         message = (
-            f"Hi {lead_name}! Thank you for speaking with Capt. Modassir at Airborne Aviation Academy.\n\n"
+            f"Hi {lead_name}! Thank you for speaking with Captain Navrang at Airborne Aviation Academy.\n\n"
             f"Based on your high interest in our pilot programs, we'd love to invite you for a 1-on-1 career counselling "
             f"and simulator session at our Dwarka Academy.\n\n"
             f"Please book your preferred slot using this link: {config.CAMPUS_BOOKING_URL}\n\n"

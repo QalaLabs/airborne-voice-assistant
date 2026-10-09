@@ -129,5 +129,37 @@ class TestAirborneAssistantFlow(unittest.TestCase):
         if scheduler.scheduler:
             scheduler.scheduler.remove_job(job_id)
 
+    def test_inbound_call_context_resolution(self):
+        """
+        Tests that incoming calls are properly identified from caller/callee numbers.
+        """
+        import piopiy_agent_worker
+        
+        # Test Case 1: Inbound call to academy number (917943446755)
+        inbound_kwargs = {
+            "from_number": "9811817062",
+            "to_number": "917943446755"
+        }
+        direction, phone = piopiy_agent_worker.resolve_call_context(inbound_kwargs)
+        self.assertEqual(direction, "inbound")
+        self.assertEqual(phone, "+919811817062")
+
+        # Test Case 2: Outbound call from academy to customer
+        outbound_kwargs = {
+            "from_number": "917943446755",
+            "to_number": "9876543210"
+        }
+        direction_out, phone_out = piopiy_agent_worker.resolve_call_context(outbound_kwargs)
+        self.assertEqual(direction_out, "outbound")
+        self.assertEqual(phone_out, "+919876543210")
+
+    def test_navrang_phrase_does_not_trigger_human_transfer(self):
+        """
+        Tests that asking for Captain Navrang does not trigger human agent exit transfer,
+        since Captain Navrang is the active persona.
+        """
+        self.assertNotIn("captain navrang", assistant.HUMAN_TRANSFER_PHRASES)
+        self.assertNotIn("navrang sir se baat", assistant.HUMAN_TRANSFER_PHRASES)
+
 if __name__ == "__main__":
     unittest.main()

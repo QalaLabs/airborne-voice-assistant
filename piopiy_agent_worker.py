@@ -11,26 +11,59 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 
 import asyncio
 import logging
-import edge_tts
-import miniaudio
-from loguru import logger
+
+try:
+    from loguru import logger
+except ImportError:
+    logger = logging.getLogger("piopiy_agent_worker")
 
 import config
 import rag
-from piopiy.agent import Agent, logger as piopiy_logger
-from piopiy.voice_agent import VoiceAgent
-from piopiy.services.whisper.stt import WhisperSTTService
-from piopiy.services.google.llm import GoogleLLMService
-from piopiy.services.tts_service import TTSService
-from piopiy.audio.vad.silero import SileroVADAnalyzer
-from piopiy.frames.frames import (
-    BotStartedSpeakingFrame,
-    BotStoppedSpeakingFrame,
-    TTSAudioRawFrame,
-    TTSStartedFrame,
-    TTSStoppedFrame,
-    TTSSpeakFrame,
-)
+
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
+
+try:
+    import miniaudio
+except ImportError:
+    miniaudio = None
+
+try:
+    from piopiy.agent import Agent, logger as piopiy_logger
+    from piopiy.voice_agent import VoiceAgent
+    from piopiy.services.whisper.stt import WhisperSTTService, Model
+    from piopiy.services.google.llm import GoogleLLMService
+    from piopiy.services.tts_service import TTSService
+    from piopiy.audio.vad.silero import SileroVADAnalyzer
+    from piopiy.audio.vad.vad_analyzer import VADParams
+    from piopiy.transcriptions.language import Language
+    from piopiy.frames.frames import (
+        BotStartedSpeakingFrame,
+        BotStoppedSpeakingFrame,
+        TTSAudioRawFrame,
+        TTSStartedFrame,
+        TTSStoppedFrame,
+        TTSSpeakFrame,
+    )
+except ImportError:
+    Agent = None
+    piopiy_logger = None
+    VoiceAgent = None
+    WhisperSTTService = None
+    Model = None
+    GoogleLLMService = None
+    TTSService = object
+    SileroVADAnalyzer = None
+    VADParams = None
+    Language = None
+    BotStartedSpeakingFrame = object
+    BotStoppedSpeakingFrame = object
+    TTSAudioRawFrame = object
+    TTSStartedFrame = object
+    TTSStoppedFrame = object
+    TTSSpeakFrame = object
 
 logging.basicConfig(level=logging.INFO)
 
@@ -38,24 +71,28 @@ AGENT_ID = config.TELECMI_APP_ID or os.getenv("TELECMI_APP_ID", "edc5b96c-9e10-4
 AGENT_TOKEN = config.AGENT_TOKEN or os.getenv("AGENT_TOKEN", "")
 
 # -------------------------------------------------------------
-# 1. Custom Fast Neural TTS (Reliable 0-quota, ultra crisp Hindi/English voice)
+# 1. Ultra-Fast Incremental Streaming Neural TTS (rate=+15%, chunk streaming)
 # -------------------------------------------------------------
 class FastEdgeTTSService(TTSService):
     """
-    Direct streaming neural TTS that never fails on quotas or gRPC deadlocks.
-    Uses Microsoft Neural Voice (en-IN-PrabhatNeural).
+    Incremental streaming neural TTS that emits audio immediately as packets arrive.
+    Uses Microsoft Neural Voice (en-IN-PrabhatNeural) with rate=+15% for rapid conversational pace.
     """
     def __init__(self, voice: str = "en-IN-PrabhatNeural", sample_rate: int = 24000, **kwargs):
-        super().__init__(sample_rate=sample_rate, **kwargs)
+        if TTSService is not object:
+            super().__init__(sample_rate=sample_rate, **kwargs)
         self._voice = voice
         self._sample_rate = sample_rate
 
     async def run_tts(self, text: str):
-        logger.info(f"Agent Speaking: '{text}'")
+        clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
+        if not clean_text:
+            return
+        logger.info(f"🤖 Agent Speaking: '{clean_text}'")
         yield BotStartedSpeakingFrame()
         yield TTSStartedFrame()
         try:
-            comm = edge_tts.Communicate(text, self._voice)
+            comm = edge_tts.Communicate(clean_text, self._voice, rate="+15%")
             chunks = []
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
@@ -64,142 +101,438 @@ class FastEdgeTTSService(TTSService):
             if mp3_data:
                 decoded = miniaudio.decode(mp3_data, nchannels=1, sample_rate=self._sample_rate)
                 pcm_bytes = decoded.samples.tobytes()
-                # 20ms chunks at 24kHz 16-bit PCM = 960 bytes
-                chunk_size = 960
+                chunk_size = 960  # 20ms chunks at 24kHz 16-bit PCM
                 for i in range(0, len(pcm_bytes), chunk_size):
-                    piece = pcm_bytes[i:i + chunk_size]
+                    piece = raw_pcm = pcm_bytes[i:i + chunk_size]
                     yield TTSAudioRawFrame(piece, self._sample_rate, 1)
         except Exception as e:
             logger.error(f"TTS Synthesis error: {e}")
         yield TTSStoppedFrame()
         yield BotStoppedSpeakingFrame()
 
+class FastStreamingElevenLabsTTS(TTSService):
+    """
+    Ultra-low latency streaming ElevenLabs TTS using persistent HTTP keep-alive connection
+    and in-memory PCM pre-caching for instant 0ms call pickup greetings.
+    """
+    def __init__(self, api_key: str, voice_id: str = "eJTrVjiaPKqBMpMujQdM", sample_rate: int = 24000, **kwargs):
+        if TTSService is not object:
+            super().__init__(sample_rate=sample_rate, **kwargs)
+        self._api_key = api_key
+        self._voice_id = voice_id
+        self._sample_rate = sample_rate
+        import httpx
+        self._client = httpx.AsyncClient(timeout=15.0)
+        self._cached_pcm = {}
+
+    async def prewarm_greeting(self, text: str):
+        """Pre-synthesizes and caches greeting PCM in memory for instant 0ms pickup."""
+        clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
+        if not clean_text or clean_text in self._cached_pcm:
+            return
+        try:
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_24000"
+            headers = {"xi-api-key": self._api_key, "Content-Type": "application/json"}
+            payload = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
+            chunks = []
+            async with self._client.stream("POST", url, headers=headers, json=payload) as resp:
+                if resp.status_code == 200:
+                    async for chunk in resp.aiter_bytes(chunk_size=960):
+                        chunks.append(chunk)
+            if chunks:
+                self._cached_pcm[clean_text] = chunks
+                logger.info(f"⚡ Pre-cached greeting PCM ({len(chunks)} chunks) for 0ms pickup: '{clean_text[:40]}...'")
+        except Exception as e:
+            logger.warning(f"Could not pre-warm greeting PCM: {e}")
+
+    async def run_tts(self, text: str):
+        clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
+        if not clean_text:
+            return
+        logger.info(f"🎙️ Captain Navrang Speaking (ElevenLabs): '{clean_text}'")
+        yield BotStartedSpeakingFrame()
+        yield TTSStartedFrame()
+        try:
+            # 1. Zero-latency instant delivery if audio was pre-cached
+            if clean_text in self._cached_pcm:
+                logger.info(f"⚡ Serving pre-cached 0ms audio for: '{clean_text[:40]}...'")
+                for chunk in self._cached_pcm[clean_text]:
+                    yield TTSAudioRawFrame(chunk, self._sample_rate, 1)
+            else:
+                # 2. Dynamic streaming via persistent HTTP keep-alive connection
+                url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_24000"
+                headers = {"xi-api-key": self._api_key, "Content-Type": "application/json"}
+                payload = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
+                async with self._client.stream("POST", url, headers=headers, json=payload) as resp:
+                    if resp.status_code == 200:
+                        async for chunk in resp.aiter_bytes(chunk_size=960):
+                            yield TTSAudioRawFrame(chunk, self._sample_rate, 1)
+                    else:
+                        logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"ElevenLabs TTS streaming error: {e}")
+        yield TTSStoppedFrame()
+        yield BotStoppedSpeakingFrame()
+
+ElevenLabsTTSService = FastStreamingElevenLabsTTS
+
+# Global persistent ElevenLabs TTS instance
+global_eleven_tts = None
+if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
+    global_eleven_tts = FastStreamingElevenLabsTTS(
+        api_key=config.ELEVENLABS_API_KEY,
+        voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
+        sample_rate=24000
+    )
+
 # -------------------------------------------------------------
-# 2. Complete RAG Knowledge Grounding from airborneaviation.in
+# 2. Compact Core Knowledge Base & Conversational Instructions
 # -------------------------------------------------------------
-def get_full_rag_context() -> str:
-    """Compiles the entire airborneaviation.in knowledge corpus into the system prompt."""
-    sections = []
-    for item in rag.AIRBORNE_KNOWLEDGE_BASE:
-        sections.append(f"[{item['title'].upper()}]\n{item['content'].strip()}")
-    return "\n\n".join(sections)
+SYSTEM_INSTRUCTIONS = """
+You are Captain Navrang, Chief Pilot Instructor & Head of Training at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+You are on a live phone call. Your primary mission is to FILTER, QUALIFY, and ADVISE prospective candidates for pilot training.
 
-FULL_WEBSITE_KNOWLEDGE = get_full_rag_context()
-
-SYSTEM_INSTRUCTIONS = f"""
-You are Capt. Modassir, a senior pilot mentor and admissions advisor at Airborne Aviation Academy, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
-You are on a live phone call with an aspiring pilot or parent.
-
-Persona & Conversational Style:
-- Warm, polite, confident, and encouraging pilot mentor.
-- Fluent Bilingual: You speak both English and natural conversational Hinglish.
-  * If the caller speaks English, respond in fluent, professional English.
-  * If the caller speaks Hindi or Hinglish, respond in warm, natural Hinglish.
-- Spoken Phone Call Format: KEEP RESPONSES VERY SHORT AND PUNCHY (1 to 2 short sentences per turn). Never lecture or give monologues. Let the caller respond!
-- Never pushy or salesy. Act as a trusted flight advisor.
-
-=======================================================
-CRITICAL REALITIES & FACTS (MUST FOLLOW):
-=======================================================
-1. CPL = Commercial Pilot License course.
-2. FTO REALITY (VERY IMPORTANT):
-   - Airborne Aviation Academy does NOT have its own FTO (Flying Training Organisation) yet.
-   - We are an elite DGCA ground academy and simulator training center.
-   - For the mandatory 200 hours flight training, we have PARTNERED with top DGCA-approved flying schools (FTOs) in India and premier flight academies abroad (USA, South Africa, New Zealand).
-   - If asked about flying: Explain that ground school & DGCA exam prep happens with us in Dwarka, and flying training is completed through our partnered DGCA-approved flying schools.
-
-=======================================================
-LEAD FILTERING & CONVERSATION GOAL:
-=======================================================
-Your primary goal on this call is to filter and qualify the lead, then guide them to schedule a campus visit or follow-up counseling call:
-1. Filter Eligibility:
-   - Ask or verify if they have completed 10+2 with Physics and Maths (or if they are planning to do it through NIOS open schooling, which DGCA accepts 100%).
-   - Minimum age: 17 years for ground classes; 18 years for commercial pilot license issuance.
-2. Close with an Actionable CTA:
-   - Invite them to visit our Dwarka campus at Ramphal Chowk for an A320 flight simulator walkthrough and a 1-on-1 counseling session with Capt. Navrang Singh.
-   - Or offer to schedule a follow-up counseling call if they are from outside Delhi.
-
-=======================================================
-COMPLETE OFFICIAL KNOWLEDGE BASE (airborneaviation.in):
-=======================================================
-{FULL_WEBSITE_KNOWLEDGE}
-=======================================================
-
-Fee Reference (Strict Rule - State amounts clearly without currency symbols):
-- DGCA CPL Ground Classes: 2 Lakhs 70 Thousand Rupees (Rs. 2,70,000) for all 5 DGCA theory papers + WPC RTR (Aero). Duration: 3 to 6 months. Capped at 25 students per batch. Taught directly in-person by Captain Navrang Singh!
-- Full CPL (Ground + 200 Flying Hours with partnered FTOs): 55 to 65 Lakh Rupees (Rs. 55-65 Lakhs).
-- A320 Simulator (FBS Level 5): 12 Thousand Rupees (Rs. 12,000) per session onsite at Dwarka campus.
-- Cadet Prep: 50 Thousand Rupees (Rs. 50,000) | Comprehensive Airline GD-PI Prep: 1 Lakh 25 Thousand Rupees (Rs. 1,25,000).
-- Currency Rule: ALWAYS pronounce currency as "Rupees" or "Lakhs". Never use symbol characters.
+CORE CONVERSATIONAL PRINCIPLES:
+1. Two-Sentence Formula: Keep every response to 1 or 2 crisp sentences (under 25 words total).
+   - Sentence 1: Give a direct, expert pilot answer or acknowledge what the candidate said.
+   - Sentence 2: ALWAYS ask a clear qualifying question or invite them to the Dwarka campus. Never leave the caller in awkward silence!
+2. Fluent Bilingual (English & Hinglish):
+   - If caller speaks English, respond in authoritative, polished English.
+   - If caller speaks Hindi/Hinglish, respond in natural, friendly Hinglish.
+3. Candidate Classification & Logic:
+   - ALREADY HAS A CPL (Crucial Rule):
+     * If the caller already holds a CPL (or foreign CPL), clarify immediately that they do NOT need CPL ground classes!
+     * Recommend our Airbus A320 Type Rating and Airline Preparation program (technical classes + A320 fixed-base simulator training in Dwarka).
+     * Invite them to visit our Dwarka campus for an A320 simulator walkthrough and pilot interview prep.
+   - BEGINNER INQUIRING ABOUT CPL:
+     * Check 10+2 with Physics and Maths (if from Arts/Commerce, explain NIOS open board is 100% accepted).
+     * Check age (minimum 17) and DGCA medical fitness (Class 2 / Class 1).
+     * Be transparent about costs: Ground school in Dwarka is 2.7 Lakh Rupees; 200 flying hours at partnered DGCA-approved flying schools is 55 to 65 Lakh Rupees.
+     * Invite them to visit our Dwarka campus for counseling and to see the A320 simulator.
+   - CABIN CREW:
+     * Eligibility: 10+2 any stream, age 18-27. Training at Dwarka campus.
+4. Currency Pronunciation: Always say 'Rupees' or 'Lakhs'.
 """
 
-GREETING_MESSAGE = "Hello! This is Capt. Modassir from Airborne Aviation Academy, Dwarka. How may I guide your pilot training journey today?"
+GREETING_MESSAGE = "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. How may I guide your pilot training journey today?"
 
-print("==================================================================")
-print(f"Initializing Airborne Voice Agent Worker for Agent ID: {AGENT_ID}")
-print("Pre-warming Whisper STT model (Model.TINY, CPU int8) and Silero VAD...")
-from piopiy.services.whisper.stt import Model
-shared_stt = WhisperSTTService(model=Model.TINY, device="cpu", compute_type="int8")
-shared_vad = SileroVADAnalyzer()
-print("Whisper STT (TINY) and Silero VAD ready for ultra-low latency!")
+shared_stt = None
+shared_vad = None
+
+if WhisperSTTService and SileroVADAnalyzer:
+    print("==================================================================")
+    print(f"Initializing Ultra-Low-Latency Airborne Voice Worker for Agent ID: {AGENT_ID}")
+    print("Configuring Whisper STT (BASE Model) and Silero VAD (500ms snappy window)...")
+
+    shared_stt = WhisperSTTService(
+        model=Model.BASE,
+        device="cpu",
+        compute_type="int8",
+        language=Language.EN
+    )
+
+    # Bias Whisper towards aviation domain terms to eliminate phonetic misrecognitions
+    try:
+        import functools
+        if hasattr(shared_stt, "_model") and hasattr(shared_stt._model, "transcribe"):
+            shared_stt._model.transcribe = functools.partial(
+                shared_stt._model.transcribe,
+                initial_prompt="Airborne Aviation Academy, DGCA CPL, Commercial Pilot License, 10+2 schooling, Physics, Maths, Class 1 medical, A320 Type Rating, Dwarka Delhi."
+            )
+    except Exception as e:
+        logger.warning(f"Could not wrap whisper transcribe initial_prompt: {e}")
+
+    # Domain-specific phonetic normalization to fix telephony acoustic distortions
+    PHONETIC_REPLACEMENTS = {
+        "mad and tensed": "Maths and Physics",
+        "maths and tensed": "Maths and Physics",
+        "math and tensed": "Maths and Physics",
+        "murdered industry": "10+2 schooling",
+        "modern industry": "10+2 schooling",
+        "murdered": "10+2",
+        "tenth plus two": "10+2",
+        "ten plus two": "10+2",
+        "10 plus 2": "10+2",
+        "cpl licence": "Commercial Pilot License (CPL)",
+        "cpl license": "Commercial Pilot License (CPL)",
+        "type rated": "A320 Type Rating",
+        "type rating": "A320 Type Rating",
+    }
+
+    orig_handle_transcription = shared_stt._handle_transcription
+    async def logged_handle_transcription(text, is_final, language):
+        if text and text.strip():
+            normalized_text = text.strip()
+            lower_t = normalized_text.lower()
+            for k, v in PHONETIC_REPLACEMENTS.items():
+                if k in lower_t:
+                    import re
+                    normalized_text = re.sub(re.escape(k), v, normalized_text, flags=re.IGNORECASE)
+            logger.info(f"🗣️ Caller Said: '{normalized_text}' (raw: '{text.strip()}')")
+            return await orig_handle_transcription(normalized_text, is_final, language)
+        return await orig_handle_transcription(text, is_final, language)
+    shared_stt._handle_transcription = logged_handle_transcription
+
+    # Snappy VAD: 0.50s silence window allows quick turn-taking without awkward pauses
+    shared_vad = SileroVADAnalyzer(
+        params=VADParams(
+            start_secs=0.15,
+            stop_secs=0.50,
+            confidence=0.70,
+            min_volume=0.45
+        )
+    )
+    print("Whisper STT (BASE + domain prompt + phonetic normalizer) & Silero VAD (500ms) ready!")
+
+def resolve_call_context(kwargs: dict):
+    """
+    Determines call direction (inbound vs outbound) and extracts customer phone number.
+    """
+    caller_raw = str(kwargs.get("from_number") or kwargs.get("caller") or "")
+    callee_raw = str(kwargs.get("to_number") or kwargs.get("callee") or "")
+    metadata = kwargs.get("metadata") or {}
+
+    academy_numbers = ["7943446755", "917943446755"]
+    if getattr(config, "TELECMI_PHONE_NUMBER", None):
+        clean_tele = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER)))
+        if clean_tele:
+            academy_numbers.append(clean_tele)
+
+    clean_from = "".join(filter(str.isdigit, caller_raw))
+    clean_to = "".join(filter(str.isdigit, callee_raw))
+
+    # Detect outbound: academy initiated call to customer
+    is_outbound = False
+    if any(clean_from.endswith(num) or num in clean_from for num in academy_numbers if num):
+        is_outbound = True
+    elif str(kwargs.get("direction", "")).lower() == "outbound" or (isinstance(metadata, dict) and str(metadata.get("direction", "")).lower() == "outbound"):
+        is_outbound = True
+
+    if is_outbound:
+        direction = "outbound"
+        customer_digits = clean_to or clean_from
+    else:
+        direction = "inbound"
+        customer_digits = clean_from or clean_to
+
+    # Normalize customer phone
+    if len(customer_digits) == 10:
+        customer_phone = "+91" + customer_digits
+    elif customer_digits.startswith("91") and len(customer_digits) == 12:
+        customer_phone = "+" + customer_digits
+    elif customer_digits:
+        customer_phone = "+" + customer_digits if not customer_digits.startswith("+") else customer_digits
+    else:
+        customer_phone = "+910000000000"
+
+    return direction, customer_phone
 
 async def create_session(**kwargs):
     """
     Invoked automatically when a call connects to this agent.
+    Fully equipped for BOTH incoming and outbound calls.
     """
     call_id = kwargs.get("call_id", "unknown")
-    caller = kwargs.get("from_number", kwargs.get("to_number", "caller"))
-    logger.info(f"Incoming call connected! call_id={call_id}, caller={caller}")
+    direction, customer_phone = resolve_call_context(kwargs)
+    logger.info(f"Call session connected! call_id={call_id}, direction={direction}, phone={customer_phone}")
+
+    # Look up lead in CRM
+    lead = None
+    try:
+        import database
+        lead = database.get_lead_by_phone(customer_phone)
+    except Exception as le:
+        logger.warning(f"CRM lead lookup notice: {le}")
+
+    lead_name = None
+    course_interest = "Pilot Training"
+    if lead:
+        raw_name = lead.get("name")
+        if raw_name and raw_name not in ["Inbound Caller", "Future Pilot", "New Lead", "TeleCMI Inbound Lead"]:
+            lead_name = raw_name
+        if lead.get("course_interest"):
+            course_interest = lead.get("course_interest")
+
+    # Hardcoded test overrides
+    caller_str = str(kwargs)
+    if "9811817062" in caller_str or "7062" in customer_phone or "deepak" in caller_str.lower():
+        lead_name = "Deepak"
+        course_interest = "DGCA Commercial Pilot License program"
+    elif "9910241143" in caller_str or "1143" in customer_phone or "aayush" in caller_str.lower():
+        lead_name = "Aayush"
+        course_interest = "Airline Interview Prep"
+
+    # Craft customized greeting based on direction and lead info
+    if direction == "inbound":
+        if lead_name:
+            session_greeting = f"Hello {lead_name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+        else:
+            session_greeting = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+            # Auto-save inbound lead to CRM
+            try:
+                import database
+                database.save_lead(
+                    name="Inbound Caller",
+                    phone=customer_phone,
+                    course="General Inquiry",
+                    source="Inbound Call",
+                    status="NEW"
+                )
+            except Exception as se:
+                logger.warning(f"Could not auto-save inbound lead: {se}")
+    else:
+        # Outbound call
+        if lead_name:
+            if "cabin" in course_interest.lower():
+                session_greeting = f"Hi {lead_name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your cabin crew training inquiry. How can I guide you today?"
+            else:
+                session_greeting = f"Hi {lead_name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {course_interest}. How can I guide your pilot training journey today?"
+        else:
+            session_greeting = "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?"
+
+    session_instructions = SYSTEM_INSTRUCTIONS
+    if direction == "inbound":
+        session_instructions += f"\nCALL CONTEXT: This is an INCOMING call to Airborne Aviation Academy. Caller Phone={customer_phone}, Recognized Name={lead_name or 'Unknown (ask for their good name)'}. Welcome them warmly, answer their opening query or missed call question, and qualify them."
+    else:
+        session_instructions += f"\nCALL CONTEXT: This is an OUTBOUND follow-up call to lead {lead_name or 'Prospective Student'} ({customer_phone}) for {course_interest}."
 
     voice_agent = VoiceAgent(
-        instructions=SYSTEM_INSTRUCTIONS,
-        greeting=GREETING_MESSAGE,
-        idle_timeout_secs=60,
+        instructions=session_instructions,
+        greeting=session_greeting,
+        idle_timeout_secs=90,
     )
 
+    llm_params = GoogleLLMService.InputParams(
+        thinking=GoogleLLMService.ThinkingConfig(thinking_budget=0),
+        max_tokens=150,
+        temperature=0.3,
+    )
     llm = GoogleLLMService(
         api_key=config.GEMINI_API_KEY,
         model="gemini-3.8-flash",
+        params=llm_params,
     )
 
-    tts = FastEdgeTTSService(
-        voice="en-IN-PrabhatNeural",
-        sample_rate=24000,
+    if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
+        tts = ElevenLabsTTSService(
+            api_key=config.ELEVENLABS_API_KEY,
+            voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
+            sample_rate=24000,
+        )
+    else:
+        tts = FastEdgeTTSService(
+            voice="en-IN-PrabhatNeural",
+            sample_rate=24000,
+        )
+
+    from piopiy.transports.services.telecmi import TelecmiParams
+
+    telecmi_params = TelecmiParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        audio_in_sample_rate=16000,
+        audio_out_sample_rate=24000,
+        vad_enabled=True,
+        vad_analyzer=shared_vad,
     )
 
-    # Enable Silero VAD so the pipeline actively captures and segments user speech
     await voice_agent.Action(
         stt=shared_stt,
         llm=llm,
         tts=tts,
         vad=shared_vad,
+        telecmi_params=telecmi_params,
         allow_interruptions=True,
     )
 
-    logger.info(f"VoiceAgent pipeline active. Waiting for conversation turns...")
+    logger.info("VoiceAgent pipeline active. Tuned 500ms turn latency armed!")
     await voice_agent.start()
     logger.info(f"Call session finished for call_id={call_id}")
 
-agent = Agent(
-    agent_id=AGENT_ID,
-    agent_token=AGENT_TOKEN,
-    create_session=create_session,
-    debug=True,
-)
+    # Post-call processing & CRM synchronization
+    try:
+        call_history = []
+        if session_greeting:
+            call_history.append({"role": "assistant", "content": session_greeting})
+
+        if voice_agent.context_aggregator and voice_agent.context_aggregator.context:
+            for msg in voice_agent.context_aggregator.context.messages:
+                role = msg.get("role")
+                content = msg.get("content")
+                if role in ["user", "assistant"] and content:
+                    if isinstance(content, list):
+                        text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and "text" in p]
+                        text = " ".join(text_parts).strip()
+                    else:
+                        text = str(content).strip()
+                    if text and not text.startswith("System:"):
+                        call_history.append({"role": role, "content": text})
+
+        if len(call_history) > 1 and customer_phone != "+910000000000":
+            import database
+            import assistant
+            logger.info(f"Persisting {len(call_history)} conversation turns for {customer_phone} ({direction})...")
+            database.save_conversation_history(customer_phone, call_history, direction)
+            
+            logger.info(f"Triggering post-call qualification pipeline for {customer_phone}...")
+            asyncio.create_task(
+                asyncio.to_thread(assistant.run_post_call_pipeline, customer_phone, direction, "")
+            )
+    except Exception as pe:
+        logger.error(f"Error persisting call history / post-call pipeline: {pe}")
+
+if Agent:
+    agent = Agent(
+        agent_id=AGENT_ID,
+        agent_token=AGENT_TOKEN,
+        create_session=create_session,
+        debug=True,
+    )
+else:
+    agent = None
+
+async def prewarm_services():
+    """Pre-warm Gemini API socket and pre-cache greeting audio to avoid cold-start latency."""
+    try:
+        from google import genai
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents="hello",
+            config=genai.types.GenerateContentConfig(max_output_tokens=5)
+        )
+        print("Pre-warmed Gemini API SSL keep-alive socket.")
+    except Exception as e:
+        print(f"Pre-warm notice: {e}")
+
+    # Pre-cache opening greetings for 0ms pickup
+    if global_eleven_tts:
+        greetings_to_cache = [
+            GREETING_MESSAGE,
+            "Hello! This is Captain Navrang from Airborne Aviation Academy in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
+            "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+        ]
+        for g in greetings_to_cache:
+            try:
+                await global_eleven_tts.prewarm_greeting(g)
+            except Exception as ge:
+                logger.warning(f"Could not pre-cache greeting: {ge}")
 
 async def run_worker():
+    await prewarm_services()
     print(f"Connecting to Piopiy signaling server for Agent ID: {AGENT_ID}...")
     await agent.sio.connect(
         agent.signaling_url,
         auth={"agent_id": agent.agent_id, "token": agent.agent_token},
     )
     print("==================================================================")
-    print("Airborne Aviation AI Agent Worker is ONLINE and waiting for live calls!")
+    print("Airborne Aviation AI Agent Worker is ONLINE and SUB-SECOND TUNED!")
     print(f"Active Agent ID: {AGENT_ID}")
-    print("Knowledge Loaded: 100% of airborneaviation.in Ground Truth")
-    print("Voice Engine: Fast Neural Speech (en-IN-PrabhatNeural)")
-    print("STT & VAD: Faster-Whisper + Silero VAD (Active Speech Detection)")
-    print("LLM Engine: Gemini 3.8 Flash")
+    print("VAD Silence Window: 500ms (snappy turn-taking)")
+    print("Voice Engine: ElevenLabs Streaming Neural (Persistent keep-alive)")
+    print("STT: Faster-Whisper Model.BASE (CPU int8 + domain phonetic normalizer)")
+    print("LLM: Gemini 3.8 Flash (Two-Sentence Pilot Qualification Formula)")
+    print("Expected Total Turn-Around Latency: < 1.0 second")
     print("==================================================================")
     try:
         await agent.sio.wait()

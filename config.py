@@ -23,10 +23,12 @@ GEMINI_API_KEY = _clean_env("GEMINI_API_KEY", "")
 GEMINI_MODEL = _clean_env("GEMINI_MODEL", "gemini-3.8-flash")
 
 # ElevenLabs Settings
-USE_ELEVENLABS = _clean_env("USE_ELEVENLABS", "false").lower() == "true"
+USE_ELEVENLABS = _clean_env("USE_ELEVENLABS", "true").lower() == "true"
 ELEVENLABS_API_KEY = _clean_env("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = _clean_env("ELEVENLABS_VOICE_ID", "")
+ELEVENLABS_KEY_ID = _clean_env("ELEVENLABS_KEY_ID", "b69d20bc454b66daeb436c793d3edf9e6018690e472e192a08625fb596abe03e")
+ELEVENLABS_VOICE_ID = _clean_env("ELEVENLABS_VOICE_ID", "eJTrVjiaPKqBMpMujQdM")
 ELEVENLABS_MODEL_ID = _clean_env("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+ELEVENLABS_AGENT_ID = _clean_env("ELEVENLABS_AGENT_ID", "agent_5701kztar977fxsb7nj7cxedcrgf")
 
 # Twilio Credentials (fallback telephony carrier)
 TWILIO_ACCOUNT_SID = _clean_env("TWILIO_ACCOUNT_SID", "")
