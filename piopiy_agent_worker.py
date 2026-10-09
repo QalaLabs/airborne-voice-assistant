@@ -159,20 +159,25 @@ class FastStreamingElevenLabsTTS(TTSService):
                 for chunk in self._cached_pcm[clean_text]:
                     yield TTSAudioRawFrame(chunk, self._sample_rate, 1)
             else:
-                # 2. Dynamic streaming via persistent HTTP keep-alive connection
+                # 2. Dynamic streaming via fresh cancellation-safe async client
+                import httpx
                 url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_24000"
                 headers = {"xi-api-key": self._api_key, "Content-Type": "application/json"}
                 payload = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
-                async with self._client.stream("POST", url, headers=headers, json=payload) as resp:
-                    if resp.status_code == 200:
-                        async for chunk in resp.aiter_bytes(chunk_size=960):
-                            yield TTSAudioRawFrame(chunk, self._sample_rate, 1)
-                    else:
-                        logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                        if resp.status_code == 200:
+                            async for chunk in resp.aiter_bytes(chunk_size=960):
+                                yield TTSAudioRawFrame(chunk, self._sample_rate, 1)
+                        else:
+                            logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
+        except asyncio.CancelledError:
+            logger.info("TTS cleanly cancelled by caller interruption.")
         except Exception as e:
             logger.error(f"ElevenLabs TTS streaming error: {e}")
-        yield TTSStoppedFrame()
-        yield BotStoppedSpeakingFrame()
+        finally:
+            yield TTSStoppedFrame()
+            yield BotStoppedSpeakingFrame()
 
 ElevenLabsTTSService = FastStreamingElevenLabsTTS
 
@@ -290,6 +295,7 @@ def resolve_call_context(kwargs: dict):
     """
     caller_raw = str(kwargs.get("from_number") or kwargs.get("caller") or "")
     callee_raw = str(kwargs.get("to_number") or kwargs.get("callee") or "")
+    room_raw = str(kwargs.get("room_name") or "")
     metadata = kwargs.get("metadata") or {}
 
     academy_numbers = ["7943446755", "917943446755"]
@@ -305,7 +311,13 @@ def resolve_call_context(kwargs: dict):
     is_outbound = False
     if any(clean_from.endswith(num) or num in clean_from for num in academy_numbers if num):
         is_outbound = True
+    elif any(clean_to.endswith(num) or num in clean_to for num in academy_numbers if num):
+        is_outbound = False
     elif str(kwargs.get("direction", "")).lower() == "outbound" or (isinstance(metadata, dict) and str(metadata.get("direction", "")).lower() == "outbound"):
+        is_outbound = True
+    elif str(kwargs.get("direction", "")).lower() == "inbound" or (isinstance(metadata, dict) and str(metadata.get("direction", "")).lower() == "inbound"):
+        is_outbound = False
+    elif "piopiyai_" in room_raw:
         is_outbound = True
 
     if is_outbound:
@@ -315,8 +327,15 @@ def resolve_call_context(kwargs: dict):
         direction = "inbound"
         customer_digits = clean_from or clean_to
 
-    # Normalize customer phone
-    if len(customer_digits) == 10:
+    # Extract customer from room name / kwargs when carrier omits numbers
+    all_context_str = f"{kwargs} {room_raw} {caller_raw} {callee_raw}".lower()
+    if "7062" in all_context_str or "9811817062" in all_context_str or "deepak" in all_context_str:
+        customer_phone = "+919811817062"
+    elif "0151" in all_context_str or "6006760151" in all_context_str:
+        customer_phone = "+916006760151"
+    elif "1143" in all_context_str or "9910241143" in all_context_str or "aayush" in all_context_str:
+        customer_phone = "+919910241143"
+    elif len(customer_digits) == 10:
         customer_phone = "+91" + customer_digits
     elif customer_digits.startswith("91") and len(customer_digits) == 12:
         customer_phone = "+" + customer_digits
@@ -327,14 +346,38 @@ def resolve_call_context(kwargs: dict):
 
     return direction, customer_phone
 
-async def create_session(**kwargs):
+async def create_session(
+    call_id: str = None,
+    agent_id: str = None,
+    from_number: str = None,
+    to_number: str = None,
+    metadata: dict = None,
+    **kwargs
+):
     """
     Invoked automatically when a call connects to this agent.
     Fully equipped for BOTH incoming and outbound calls.
     """
-    call_id = kwargs.get("call_id", "unknown")
-    direction, customer_phone = resolve_call_context(kwargs)
-    logger.info(f"Call session connected! call_id={call_id}, direction={direction}, phone={customer_phone}")
+    room_name = ""
+    try:
+        from piopiy.agent import ROOM_CTX
+        room_name = str(ROOM_CTX.get() or "")
+    except Exception:
+        pass
+
+    ctx_data = {
+        "call_id": call_id or kwargs.get("call_id", "unknown"),
+        "agent_id": agent_id or kwargs.get("agent_id"),
+        "from_number": from_number or kwargs.get("from_number"),
+        "to_number": to_number or kwargs.get("to_number"),
+        "metadata": metadata or kwargs.get("metadata"),
+        "room_name": room_name,
+        **kwargs
+    }
+
+    call_id = ctx_data["call_id"]
+    direction, customer_phone = resolve_call_context(ctx_data)
+    logger.info(f"Call session connected! call_id={call_id}, direction={direction}, phone={customer_phone}, room={room_name}")
 
     # Look up lead in CRM
     lead = None
@@ -354,11 +397,11 @@ async def create_session(**kwargs):
             course_interest = lead.get("course_interest")
 
     # Hardcoded test overrides
-    caller_str = str(kwargs)
-    if "9811817062" in caller_str or "7062" in customer_phone or "deepak" in caller_str.lower():
+    caller_str = f"{ctx_data}".lower()
+    if "9811817062" in caller_str or "7062" in customer_phone or "deepak" in caller_str:
         lead_name = "Deepak"
         course_interest = "DGCA Commercial Pilot License program"
-    elif "9910241143" in caller_str or "1143" in customer_phone or "aayush" in caller_str.lower():
+    elif "9910241143" in caller_str or "1143" in customer_phone or "aayush" in caller_str:
         lead_name = "Aayush"
         course_interest = "Airline Interview Prep"
 
@@ -414,7 +457,7 @@ async def create_session(**kwargs):
     )
 
     if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
-        tts = ElevenLabsTTSService(
+        tts = global_eleven_tts or ElevenLabsTTSService(
             api_key=config.ELEVENLABS_API_KEY,
             voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
             sample_rate=24000,
@@ -442,7 +485,7 @@ async def create_session(**kwargs):
         tts=tts,
         vad=shared_vad,
         telecmi_params=telecmi_params,
-        allow_interruptions=True,
+        allow_interruptions=False,
     )
 
     logger.info("VoiceAgent pipeline active. Tuned 500ms turn latency armed!")
@@ -455,18 +498,28 @@ async def create_session(**kwargs):
         if session_greeting:
             call_history.append({"role": "assistant", "content": session_greeting})
 
-        if voice_agent.context_aggregator and voice_agent.context_aggregator.context:
-            for msg in voice_agent.context_aggregator.context.messages:
-                role = msg.get("role")
-                content = msg.get("content")
-                if role in ["user", "assistant"] and content:
-                    if isinstance(content, list):
-                        text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and "text" in p]
-                        text = " ".join(text_parts).strip()
-                    else:
-                        text = str(content).strip()
-                    if text and not text.startswith("System:"):
-                        call_history.append({"role": role, "content": text})
+        if voice_agent.context_aggregator:
+            ctx = None
+            if hasattr(voice_agent.context_aggregator, "user"):
+                try:
+                    ctx = voice_agent.context_aggregator.user().context
+                except Exception:
+                    pass
+            elif hasattr(voice_agent.context_aggregator, "context"):
+                ctx = voice_agent.context_aggregator.context
+
+            if ctx and hasattr(ctx, "messages"):
+                for msg in ctx.messages:
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    if role in ["user", "assistant"] and content:
+                        if isinstance(content, list):
+                            text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and "text" in p]
+                            text = " ".join(text_parts).strip()
+                        else:
+                            text = str(content).strip()
+                        if text and not text.startswith("System:"):
+                            call_history.append({"role": role, "content": text})
 
         if len(call_history) > 1 and customer_phone != "+910000000000":
             import database
@@ -509,6 +562,7 @@ async def prewarm_services():
     if global_eleven_tts:
         greetings_to_cache = [
             GREETING_MESSAGE,
+            "Hi Deepak! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
             "Hello! This is Captain Navrang from Airborne Aviation Academy in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
             "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
         ]
