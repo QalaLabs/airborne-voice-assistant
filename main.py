@@ -18,11 +18,31 @@ from assistant import handle_conversation, get_greeting_voice_url, run_post_call
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Starts background services and initializes PostgreSQL database schema on startup.
+    Starts background services, initializes PostgreSQL database schema,
+    and runs the PioPiy AI Agent Worker for real-time signaling.
     """
+    import asyncio
     database.init_db()
     scheduler.init_scheduler()
+
+    # Launch Piopiy AI agent worker for real-time call signaling
+    worker_task = None
+    try:
+        import piopiy_agent_worker
+        if getattr(piopiy_agent_worker, "agent", None):
+            worker_task = asyncio.create_task(piopiy_agent_worker.run_worker())
+            print("🚀 Piopiy AI Agent Worker background task launched.")
+    except Exception as e:
+        print(f"Notice starting piopiy_agent_worker: {e}")
+
     yield
+
+    if worker_task:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(title="Airborne Aviation AI Voice Assistant", lifespan=lifespan)
 

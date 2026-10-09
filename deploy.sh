@@ -40,8 +40,8 @@ gcloud run deploy $SERVICE_NAME \
     --region $REGION \
     --platform managed \
     --allow-unauthenticated \
-    --memory 1Gi \
-    --cpu 1 \
+    --memory 2Gi \
+    --cpu 2 \
     --min-instances 1 \
     --max-instances 10 \
     --no-cpu-throttling \
