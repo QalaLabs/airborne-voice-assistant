@@ -15,14 +15,19 @@ else:
 
 if not config.GEMINI_API_KEY:
     print("Warning: GEMINI_API_KEY is not set.")
+elif not config.GEMINI_API_KEY.startswith("AIza"):
+    print("Warning: GEMINI_API_KEY does not start with standard 'AIza' prefix. Please verify your Google AI Studio API key.")
+
+# Persistent HTTP session for connection pooling and zero-handshake overhead
+_gemini_session = requests.Session()
 
 def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
     """
     Integrates with Google Gemini API via REST requests to process conversations.
-    This avoids dependencies on external SDK packages.
+    Uses persistent HTTP keep-alive connection and sub-second model routing.
     """
     preferred_model = config.GEMINI_MODEL or "gemini-3.8-flash"
-    fallback_models = [preferred_model, "gemini-3.6-flash", "gemini-3.1-flash-lite"]
+    fallback_models = [preferred_model, "gemini-3.8-flash", "gemini-2.0-flash", "gemini-2.5-flash"]
     # De-duplicate while preserving order
     models_to_try = list(dict.fromkeys(fallback_models))
     
@@ -50,9 +55,8 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
     })
     
     generation_config = {
-        "maxOutputTokens": 500 if json_mode else 300,
-        "temperature": 0.2 if json_mode else 0.7,
-        "thinkingConfig": {"thinkingBudget": 0}
+        "maxOutputTokens": 400 if json_mode else 120,
+        "temperature": 0.2 if json_mode else 0.4
     }
     if json_mode:
         generation_config["responseMimeType"] = "application/json"
@@ -70,8 +74,14 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
     last_err = None
     for candidate_model in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent"
+        # Disable thinking budget on models that support it (2.5, 3.8, thinking) for minimum voice latency
+        if any(tag in candidate_model for tag in ("2.5", "3.8", "thinking")):
+            generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+        else:
+            generation_config.pop("thinkingConfig", None)
+
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=12)
+            response = _gemini_session.post(url, json=payload, headers=headers, timeout=10)
             if response.status_code in [500, 503, 429]:
                 print(f"Gemini {candidate_model} returned {response.status_code}. Trying next model...")
                 continue
@@ -161,7 +171,7 @@ def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", js
         except Exception as e:
             print(f"OpenAI query failed: {e}")
             
-    # 3. Tertiary Fallback: Mock Response
+    # 4. Final Mock Fallback: Mock Response
     if json_mode:
         return json.dumps({
             "course_interest": "DGCA CPL Ground Classes",

@@ -47,5 +47,7 @@ def schedule_outbound_call(lead_name: str, lead_phone: str, delay_seconds: int =
             args=[lead_name, lead_phone],
             id=job_id
         )
-    print(f"Scheduled outbound call for {lead_name} ({lead_phone}) at {run_time}.")
+        print(f"Scheduled outbound call for {lead_name} ({lead_phone}) at {run_time}.")
+    else:
+        print(f"Notice: APScheduler not active. Mock schedule outbound call for {lead_name} ({lead_phone}) at {run_time}.")
     return job_id

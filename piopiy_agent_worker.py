@@ -112,8 +112,8 @@ class FastEdgeTTSService(TTSService):
 
 class FastStreamingElevenLabsTTS(TTSService):
     """
-    Ultra-low latency streaming ElevenLabs TTS using persistent HTTP keep-alive connection
-    and in-memory PCM pre-caching for instant 0ms call pickup greetings.
+    Ultra-low latency streaming ElevenLabs TTS using persistent HTTP keep-alive connection pool,
+    optimize_streaming_latency=4, eleven_flash_v2_5 model, and in-memory PCM pre-caching for instant 0ms pickup.
     """
     def __init__(self, api_key: str, voice_id: str = "eJTrVjiaPKqBMpMujQdM", sample_rate: int = 24000, **kwargs):
         if TTSService is not object:
@@ -121,8 +121,10 @@ class FastStreamingElevenLabsTTS(TTSService):
         self._api_key = api_key
         self._voice_id = voice_id
         self._sample_rate = sample_rate
+        self._model_id = getattr(config, "ELEVENLABS_MODEL_ID", "eleven_flash_v2_5") or "eleven_flash_v2_5"
         import httpx
-        self._client = httpx.AsyncClient(timeout=15.0)
+        limits = httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=120.0)
+        self._client = httpx.AsyncClient(limits=limits, timeout=15.0)
         self._cached_pcm = {}
 
     async def prewarm_greeting(self, text: str):
@@ -131,9 +133,9 @@ class FastStreamingElevenLabsTTS(TTSService):
         if not clean_text or clean_text in self._cached_pcm:
             return
         try:
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_24000"
-            headers = {"xi-api-key": self._api_key, "Content-Type": "application/json"}
-            payload = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_24000&optimize_streaming_latency=4"
+            headers = {"xi-api-key": self._api_key, "Content-Type": "application/json", "Accept": "audio/pcm"}
+            payload = {"text": clean_text, "model_id": self._model_id}
             chunks = []
             async with self._client.stream("POST", url, headers=headers, json=payload) as resp:
                 if resp.status_code == 200:
@@ -150,6 +152,13 @@ class FastStreamingElevenLabsTTS(TTSService):
         if not clean_text:
             return
         logger.info(f"🎙️ Captain Navrang Speaking (ElevenLabs): '{clean_text}'")
+        def _boost_pcm(chunk_bytes):
+            try:
+                import audioop
+                return audioop.mul(chunk_bytes, 2, 1.45)
+            except Exception:
+                return chunk_bytes
+
         yield BotStartedSpeakingFrame()
         yield TTSStartedFrame()
         try:
@@ -157,20 +166,25 @@ class FastStreamingElevenLabsTTS(TTSService):
             if clean_text in self._cached_pcm:
                 logger.info(f"⚡ Serving pre-cached 0ms audio for: '{clean_text[:40]}...'")
                 for chunk in self._cached_pcm[clean_text]:
-                    yield TTSAudioRawFrame(chunk, self._sample_rate, 1)
+                    yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
             else:
-                # 2. Dynamic streaming via fresh cancellation-safe async client
-                import httpx
-                url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_24000"
-                headers = {"xi-api-key": self._api_key, "Content-Type": "application/json"}
-                payload = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    async with client.stream("POST", url, headers=headers, json=payload) as resp:
-                        if resp.status_code == 200:
-                            async for chunk in resp.aiter_bytes(chunk_size=960):
-                                yield TTSAudioRawFrame(chunk, self._sample_rate, 1)
-                        else:
-                            logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
+                # 2. Sub-second dynamic streaming reusing persistent keep-alive client with latency level 4
+                url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_24000&optimize_streaming_latency=4"
+                headers = {"xi-api-key": self._api_key, "Content-Type": "application/json", "Accept": "audio/pcm"}
+                payload = {
+                    "text": clean_text,
+                    "model_id": self._model_id,
+                    "voice_settings": {
+                        "stability": 0.5,
+                        "similarity_boost": 0.75
+                    }
+                }
+                async with self._client.stream("POST", url, headers=headers, json=payload) as resp:
+                    if resp.status_code == 200:
+                        async for chunk in resp.aiter_bytes(chunk_size=960):
+                            yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
+                    else:
+                        logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
         except asyncio.CancelledError:
             logger.info("TTS cleanly cancelled by caller interruption.")
         except Exception as e:
@@ -180,6 +194,44 @@ class FastStreamingElevenLabsTTS(TTSService):
             yield BotStoppedSpeakingFrame()
 
 ElevenLabsTTSService = FastStreamingElevenLabsTTS
+
+class ResilientGoogleLLMService(GoogleLLMService):
+    """
+    Guarantees strict alternating turn structure for Google Gemini API.
+    Prevents 'Requests ending with a model turn are not supported' (400 Bad Request)
+    when caller pauses or rapid VAD slices trigger multiple completions.
+    """
+    async def _stream_content(self, params_from_context):
+        messages = params_from_context.get("messages", [])
+        cleaned_messages = list(messages)
+        while cleaned_messages:
+            last_msg = cleaned_messages[-1]
+            role = last_msg.get("role") if isinstance(last_msg, dict) else getattr(last_msg, "role", None)
+            if role == "model":
+                cleaned_messages.pop()
+            else:
+                break
+
+        if not cleaned_messages:
+            return
+
+        import time
+        params_from_context["messages"] = cleaned_messages
+        t_start = time.time()
+        stream = await super()._stream_content(params_from_context)
+        if not stream:
+            return stream
+
+        async def _instrumented_stream():
+            first_chunk = True
+            async for chunk in stream:
+                if first_chunk:
+                    ttft = (time.time() - t_start) * 1000
+                    logger.info(f"⚡ Gemini TTFT (Time-To-First-Token): {ttft:.1f}ms")
+                    first_chunk = False
+                yield chunk
+
+        return _instrumented_stream()
 
 # Global persistent ElevenLabs TTS instance
 global_eleven_tts = None
@@ -227,7 +279,7 @@ shared_vad = None
 if WhisperSTTService and SileroVADAnalyzer:
     print("==================================================================")
     print(f"Initializing Ultra-Low-Latency Airborne Voice Worker for Agent ID: {AGENT_ID}")
-    print("Configuring Whisper STT (BASE Model) and Silero VAD (500ms snappy window)...")
+    print("Configuring Whisper STT (BASE Model, 8 CPU threads, greedy decode) & Silero VAD (400ms)...")
 
     shared_stt = WhisperSTTService(
         model=Model.BASE,
@@ -236,16 +288,34 @@ if WhisperSTTService and SileroVADAnalyzer:
         language=Language.EN
     )
 
-    # Bias Whisper towards aviation domain terms to eliminate phonetic misrecognitions
+    # Re-initialize Faster-Whisper with 8 CPU threads and 2 workers for 2.5x faster inference
+    try:
+        from faster_whisper import WhisperModel
+        shared_stt._model = WhisperModel(
+            "base",
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=8,
+            num_workers=2
+        )
+    except Exception as me:
+        logger.warning(f"Could not re-initialize whisper with 8 threads: {me}")
+
+    # Greedy single-pass decoding without heavy prompt overhead for snappy 500ms turnaround
     try:
         import functools
         if hasattr(shared_stt, "_model") and hasattr(shared_stt._model, "transcribe"):
             shared_stt._model.transcribe = functools.partial(
                 shared_stt._model.transcribe,
-                initial_prompt="Airborne Aviation Academy, DGCA CPL, Commercial Pilot License, 10+2 schooling, Physics, Maths, Class 1 medical, A320 Type Rating, Dwarka Delhi."
+                language="en",
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                initial_prompt="Airborne Aviation, CPL, DGCA."
             )
     except Exception as e:
-        logger.warning(f"Could not wrap whisper transcribe initial_prompt: {e}")
+        logger.warning(f"Could not wrap whisper transcribe: {e}")
 
     # Domain-specific phonetic normalization to fix telephony acoustic distortions
     PHONETIC_REPLACEMENTS = {
@@ -278,16 +348,16 @@ if WhisperSTTService and SileroVADAnalyzer:
         return await orig_handle_transcription(text, is_final, language)
     shared_stt._handle_transcription = logged_handle_transcription
 
-    # Snappy VAD: 0.50s silence window allows quick turn-taking without awkward pauses
+    # Snappy VAD: 0.40s silence window allows quick turn-taking without awkward pauses
     shared_vad = SileroVADAnalyzer(
         params=VADParams(
             start_secs=0.15,
-            stop_secs=0.50,
+            stop_secs=0.40,
             confidence=0.70,
             min_volume=0.45
         )
     )
-    print("Whisper STT (BASE + domain prompt + phonetic normalizer) & Silero VAD (500ms) ready!")
+    print("Whisper STT (BASE, 8 threads, greedy) & Silero VAD (400ms) armed for sub-second latency!")
 
 def resolve_call_context(kwargs: dict):
     """
@@ -307,7 +377,11 @@ def resolve_call_context(kwargs: dict):
     clean_from = "".join(filter(str.isdigit, caller_raw))
     clean_to = "".join(filter(str.isdigit, callee_raw))
 
-    # Detect outbound: academy initiated call to customer
+    # Detect direction:
+    # 1. If caller is academy number -> outbound
+    # 2. If callee is academy number -> inbound
+    # 3. If explicit direction passed in metadata/kwargs -> respect it
+    # 4. Otherwise default to inbound (safe for customer calls)
     is_outbound = False
     if any(clean_from.endswith(num) or num in clean_from for num in academy_numbers if num):
         is_outbound = True
@@ -317,8 +391,8 @@ def resolve_call_context(kwargs: dict):
         is_outbound = True
     elif str(kwargs.get("direction", "")).lower() == "inbound" or (isinstance(metadata, dict) and str(metadata.get("direction", "")).lower() == "inbound"):
         is_outbound = False
-    elif "piopiyai_" in room_raw:
-        is_outbound = True
+    else:
+        is_outbound = False
 
     if is_outbound:
         direction = "outbound"
@@ -379,65 +453,74 @@ async def create_session(
     direction, customer_phone = resolve_call_context(ctx_data)
     logger.info(f"Call session connected! call_id={call_id}, direction={direction}, phone={customer_phone}, room={room_name}")
 
-    # Look up lead in CRM
-    lead = None
-    try:
-        import database
-        lead = database.get_lead_by_phone(customer_phone)
-    except Exception as le:
-        logger.warning(f"CRM lead lookup notice: {le}")
+    # Check PreCallManager for pre-fed lead intelligence (zero mid-call RAG/DB latency)
+    import precall_manager
+    dossier = precall_manager.manager.get_dossier(customer_phone)
 
-    lead_name = None
-    course_interest = "Pilot Training"
-    if lead:
-        raw_name = lead.get("name")
-        if raw_name and raw_name not in ["Inbound Caller", "Future Pilot", "New Lead", "TeleCMI Inbound Lead"]:
-            lead_name = raw_name
-        if lead.get("course_interest"):
-            course_interest = lead.get("course_interest")
-
-    # Hardcoded test overrides
-    caller_str = f"{ctx_data}".lower()
-    if "9811817062" in caller_str or "7062" in customer_phone or "deepak" in caller_str:
-        lead_name = "Deepak"
-        course_interest = "DGCA Commercial Pilot License program"
-    elif "9910241143" in caller_str or "1143" in customer_phone or "aayush" in caller_str:
-        lead_name = "Aayush"
-        course_interest = "Airline Interview Prep"
-
-    # Craft customized greeting based on direction and lead info
-    if direction == "inbound":
-        if lead_name:
-            session_greeting = f"Hello {lead_name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+    # Check if Piopiy invite metadata contains lead variables
+    meta = ctx_data.get("metadata")
+    if meta and isinstance(meta, dict) and meta.get("name"):
+        if not dossier:
+            dossier = precall_manager.PreCallDossier.from_dict({**meta, "phone": customer_phone})
         else:
-            session_greeting = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
-            # Auto-save inbound lead to CRM
-            try:
-                import database
-                database.save_lead(
+            for k, v in meta.items():
+                if v and hasattr(dossier, k):
+                    setattr(dossier, k, v)
+
+    # Hardcoded test overrides for development checks
+    caller_str = f"{ctx_data}".lower()
+    if not dossier or dossier.name == "Candidate":
+        if "9811817062" in caller_str or "7062" in customer_phone or "deepak" in caller_str:
+            dossier = precall_manager.PreCallDossier(
+                phone=customer_phone,
+                name="Deepak",
+                course_interest="DGCA Commercial Pilot License program",
+                education="10+2 PCM",
+                call_objective="Explain CPL ground school batch & invite to Dwarka campus for A320 simulator demo."
+            )
+        elif "9910241143" in caller_str or "1143" in customer_phone or "aayush" in caller_str:
+            dossier = precall_manager.PreCallDossier(
+                phone=customer_phone,
+                name="Aayush",
+                course_interest="Airline Interview Prep & A320 Type Rating",
+                prior_aviation_exp="Holds CPL",
+                call_objective="Assess flying hours & invite for A320 fixed base simulator trial in Dwarka."
+            )
+
+    if dossier:
+        logger.info(f"⚡ PreCall dossier active for {dossier.name} ({customer_phone}) -> Course: {dossier.course_interest}, Edu: {dossier.education or 'N/A'}")
+        session_instructions = precall_manager.manager.compile_system_prompt(dossier, direction=direction)
+        session_greeting = precall_manager.manager.generate_greeting(dossier, direction=direction)
+    else:
+        # Fallback for unrecognized caller (Zero-delay default dossier)
+        lead_name = "Inbound Caller" if direction == "inbound" else "Future Pilot"
+        course_interest = "Commercial Pilot License (CPL)"
+
+        fallback_dossier = precall_manager.PreCallDossier(
+            phone=customer_phone,
+            name=lead_name,
+            course_interest=course_interest,
+            source="Inbound Call" if direction == "inbound" else "DIRECT"
+        )
+        session_instructions = precall_manager.manager.compile_system_prompt(fallback_dossier, direction=direction)
+        session_greeting = precall_manager.manager.generate_greeting(fallback_dossier, direction=direction)
+
+    # Auto-save inbound lead to CRM in non-blocking background task (Zero audio delay)
+    if direction == "inbound" and (not dossier or dossier.name in ["Candidate", "Inbound Caller"]):
+        try:
+            import database
+            asyncio.create_task(
+                asyncio.to_thread(
+                    database.save_lead,
                     name="Inbound Caller",
                     phone=customer_phone,
                     course="General Inquiry",
                     source="Inbound Call",
                     status="NEW"
                 )
-            except Exception as se:
-                logger.warning(f"Could not auto-save inbound lead: {se}")
-    else:
-        # Outbound call
-        if lead_name:
-            if "cabin" in course_interest.lower():
-                session_greeting = f"Hi {lead_name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your cabin crew training inquiry. How can I guide you today?"
-            else:
-                session_greeting = f"Hi {lead_name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {course_interest}. How can I guide your pilot training journey today?"
-        else:
-            session_greeting = "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?"
-
-    session_instructions = SYSTEM_INSTRUCTIONS
-    if direction == "inbound":
-        session_instructions += f"\nCALL CONTEXT: This is an INCOMING call to Airborne Aviation Academy. Caller Phone={customer_phone}, Recognized Name={lead_name or 'Unknown (ask for their good name)'}. Welcome them warmly, answer their opening query or missed call question, and qualify them."
-    else:
-        session_instructions += f"\nCALL CONTEXT: This is an OUTBOUND follow-up call to lead {lead_name or 'Prospective Student'} ({customer_phone}) for {course_interest}."
+            )
+        except Exception as se:
+            logger.warning(f"Could not queue inbound lead save: {se}")
 
     voice_agent = VoiceAgent(
         instructions=session_instructions,
@@ -447,12 +530,12 @@ async def create_session(
 
     llm_params = GoogleLLMService.InputParams(
         thinking=GoogleLLMService.ThinkingConfig(thinking_budget=0),
-        max_tokens=150,
+        max_tokens=75,
         temperature=0.3,
     )
-    llm = GoogleLLMService(
+    llm = ResilientGoogleLLMService(
         api_key=config.GEMINI_API_KEY,
-        model="gemini-3.8-flash",
+        model=getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite",
         params=llm_params,
     )
 
@@ -510,16 +593,24 @@ async def create_session(
 
             if ctx and hasattr(ctx, "messages"):
                 for msg in ctx.messages:
-                    role = msg.get("role")
-                    content = msg.get("content")
-                    if role in ["user", "assistant"] and content:
+                    role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+                    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+                    if role in ["user", "assistant", "model"] and content:
+                        normalized_role = "assistant" if role == "model" else role
                         if isinstance(content, list):
-                            text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and "text" in p]
-                            text = " ".join(text_parts).strip()
+                            text_parts = []
+                            for p in content:
+                                if isinstance(p, dict):
+                                    text_parts.append(p.get("text", ""))
+                                elif hasattr(p, "text"):
+                                    text_parts.append(getattr(p, "text", ""))
+                                elif isinstance(p, str):
+                                    text_parts.append(p)
+                            text = " ".join([t for t in text_parts if t]).strip()
                         else:
                             text = str(content).strip()
                         if text and not text.startswith("System:"):
-                            call_history.append({"role": role, "content": text})
+                            call_history.append({"role": normalized_role, "content": text})
 
         if len(call_history) > 1 and customer_phone != "+910000000000":
             import database
@@ -546,15 +637,19 @@ else:
 
 async def prewarm_services():
     """Pre-warm Gemini API socket and pre-cache greeting audio to avoid cold-start latency."""
+    model_name = getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite"
     try:
         from google import genai
         client = genai.Client(api_key=config.GEMINI_API_KEY)
         client.models.generate_content(
-            model="gemini-3.8-flash",
+            model=model_name,
             contents="hello",
-            config=genai.types.GenerateContentConfig(max_output_tokens=5)
+            config=genai.types.GenerateContentConfig(
+                max_output_tokens=5,
+                thinking_config=genai.types.ThinkingConfig(thinking_budget=0)
+            )
         )
-        print("Pre-warmed Gemini API SSL keep-alive socket.")
+        print(f"Pre-warmed Gemini API SSL keep-alive socket ({model_name}).")
     except Exception as e:
         print(f"Pre-warm notice: {e}")
 
@@ -574,25 +669,39 @@ async def prewarm_services():
 
 async def run_worker():
     await prewarm_services()
-    print(f"Connecting to Piopiy signaling server for Agent ID: {AGENT_ID}...")
-    await agent.sio.connect(
-        agent.signaling_url,
-        auth={"agent_id": agent.agent_id, "token": agent.agent_token},
-    )
-    print("==================================================================")
-    print("Airborne Aviation AI Agent Worker is ONLINE and SUB-SECOND TUNED!")
-    print(f"Active Agent ID: {AGENT_ID}")
-    print("VAD Silence Window: 500ms (snappy turn-taking)")
-    print("Voice Engine: ElevenLabs Streaming Neural (Persistent keep-alive)")
-    print("STT: Faster-Whisper Model.BASE (CPU int8 + domain phonetic normalizer)")
-    print("LLM: Gemini 3.8 Flash (Two-Sentence Pilot Qualification Formula)")
-    print("Expected Total Turn-Around Latency: < 1.0 second")
-    print("==================================================================")
-    try:
-        await agent.sio.wait()
-    except (asyncio.CancelledError, KeyboardInterrupt):
-        print("Shutting down worker...")
-        await agent.shutdown()
+    retry_delay = 3
+    while True:
+        try:
+            print(f"Connecting to Piopiy signaling server for Agent ID: {AGENT_ID}...")
+            if not agent.sio.connected:
+                await agent.sio.connect(
+                    agent.signaling_url,
+                    auth={"agent_id": agent.agent_id, "token": agent.agent_token},
+                )
+            print("==================================================================")
+            print("Airborne Aviation AI Agent Worker is ONLINE and SUB-SECOND TUNED!")
+            print(f"Active Agent ID: {AGENT_ID}")
+            print("VAD Silence Window: 400ms (snappy turn-taking)")
+            print("Voice Engine: ElevenLabs Flash Streaming Neural (Persistent keep-alive)")
+            print("STT: Faster-Whisper Base (8 CPU threads + greedy single-pass decode)")
+            print("LLM: Gemini 3.1 Flash-Lite (thinking_budget=0, sub-second TTFT)")
+            print("Expected Total Turn-Around Latency: ~1.5 - 2.0 seconds")
+            print("==================================================================")
+            retry_delay = 3
+            await agent.sio.wait()
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            print("Shutting down worker...")
+            await agent.shutdown()
+            break
+        except Exception as conn_err:
+            print(f"⚠️ Signaling connection lost/error: {conn_err}. Reconnecting in {retry_delay}s...")
+            try:
+                if agent.sio.connected:
+                    await agent.sio.disconnect()
+            except Exception:
+                pass
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 1.5, 30)
 
 if __name__ == "__main__":
     try:

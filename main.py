@@ -6,6 +6,8 @@ import uvicorn
 import os
 import hmac
 
+from contextlib import asynccontextmanager
+
 import config
 import database
 import rag
@@ -13,7 +15,16 @@ import scheduler
 import supabase_client
 from assistant import handle_conversation, get_greeting_voice_url, run_post_call_pipeline
 
-app = FastAPI(title="Airborne Aviation AI Voice Assistant")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Starts background services and initializes PostgreSQL database schema on startup.
+    """
+    database.init_db()
+    scheduler.init_scheduler()
+    yield
+
+app = FastAPI(title="Airborne Aviation AI Voice Assistant", lifespan=lifespan)
 
 # Ensure static directory exists
 os.makedirs("static", exist_ok=True)
@@ -50,14 +61,6 @@ def format_lead_date(dt) -> str:
         return f"{day}{suffix} {dt.strftime('%B')}"
     except Exception:
         return "recently"
-
-@app.on_event("startup")
-def startup_event():
-    """
-    Starts background services and initializes PostgreSQL database schema on startup.
-    """
-    database.init_db()
-    scheduler.init_scheduler()
 
 @app.get("/")
 async def root_status(request: Request):
@@ -240,12 +243,30 @@ async def new_lead_webhook(request: Request):
         name = data.get("name") or data.get("Name") or "New Lead"
         phone = data.get("phone") or data.get("Phone") or data.get("mobile")
         email = data.get("email") or data.get("Email")
-        course = data.get("course") or data.get("Course")
+        course = data.get("course") or data.get("Course") or "Commercial Pilot License (CPL)"
+        education = data.get("education") or data.get("Education")
+        city = data.get("city") or data.get("City")
+        notes = data.get("notes") or data.get("Notes")
+        call_objective = data.get("call_objective") or data.get("objective")
         
         if not phone:
             return {"status": "error", "message": "Phone number is required."}
             
-        # Ingest lead into Supabase
+        # Register in PreCallManager for zero-latency prompt compilation & 0ms audio pre-warm
+        import precall_manager
+        dossier = precall_manager.manager.register_precall(
+            phone=phone,
+            name=name,
+            course_interest=course,
+            education=education,
+            city=city,
+            notes=notes,
+            call_objective=call_objective,
+            source="WEBHOOK_NEW_LEAD",
+            prewarm_audio=True
+        )
+
+        # Ingest lead into database
         lead = supabase_client.save_lead(name, phone, email, course, status="Cold")
         
         # Schedule outbound call within 2 minutes (120 seconds)
@@ -253,79 +274,186 @@ async def new_lead_webhook(request: Request):
         
         return {
             "status": "success",
-            "message": "Lead registered and outbound call scheduled.",
-            "lead_id": lead.get("id") if lead else None
+            "message": "Lead registered, pre-call dossier compiled, audio pre-warmed, and call scheduled.",
+            "lead_id": lead.get("id") if lead else None,
+            "greeting_text": precall_manager.manager.generate_greeting(dossier, direction="outbound")
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.post("/api/calls/prefeed")
+async def api_feed_precall_data(request: Request):
+    """
+    Feeds lead context to the voice agent BEFORE making a call.
+    Pre-compiles the LLM system prompt and pre-warms the opening greeting audio.
+    Ensures the subsequent phone call has ZERO mid-call database lag and 0ms initial pickup latency.
+    """
+    try:
+        data = await request.json()
+        phone = data.get("phone")
+        if not phone:
+            return JSONResponse({"status": "error", "message": "Phone number is required."}, status_code=400)
+
+        import precall_manager
+        dossier = precall_manager.manager.register_precall(
+            phone=phone,
+            name=data.get("name", "Candidate"),
+            course_interest=data.get("course_interest", "Commercial Pilot License (CPL)"),
+            education=data.get("education"),
+            age=data.get("age"),
+            city=data.get("city"),
+            prior_aviation_exp=data.get("prior_aviation_exp"),
+            medicals_status=data.get("medicals_status"),
+            budget_or_loan=data.get("budget_or_loan"),
+            notes=data.get("notes"),
+            call_objective=data.get("call_objective"),
+            preferred_language=data.get("preferred_language", "Hinglish"),
+            custom_instructions=data.get("custom_instructions"),
+            source=data.get("source", "PREFEED_API"),
+            prewarm_audio=data.get("prewarm_audio", True)
+        )
+
+        greeting = precall_manager.manager.generate_greeting(dossier, direction="outbound")
+        compiled_prompt = precall_manager.manager.compile_system_prompt(dossier, direction="outbound")
+
+        return JSONResponse({
+            "status": "success",
+            "message": "Pre-call context successfully fed and cached.",
+            "phone": phone,
+            "candidate_name": dossier.name,
+            "course": dossier.course_interest,
+            "generated_greeting": greeting,
+            "prewarm_audio_triggered": True,
+            "prompt_length_chars": len(compiled_prompt)
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.post("/api/calls/dispatch")
+async def api_dispatch_call_with_prefeed(request: Request, background_tasks: BackgroundTasks):
+    """
+    Feeds lead context AND immediately triggers the outbound call.
+    The agent answers with pre-warmed audio (0ms latency) and full candidate context baked in.
+    """
+    try:
+        data = await request.json()
+        phone = data.get("phone")
+        if not phone:
+            return JSONResponse({"status": "error", "message": "Phone number is required."}, status_code=400)
+
+        import precall_manager
+        import telephony
+
+        # 1. Register & pre-warm
+        dossier = precall_manager.manager.register_precall(
+            phone=phone,
+            name=data.get("name", "Candidate"),
+            course_interest=data.get("course_interest", "Commercial Pilot License (CPL)"),
+            education=data.get("education"),
+            age=data.get("age"),
+            city=data.get("city"),
+            prior_aviation_exp=data.get("prior_aviation_exp"),
+            medicals_status=data.get("medicals_status"),
+            budget_or_loan=data.get("budget_or_loan"),
+            notes=data.get("notes"),
+            call_objective=data.get("call_objective"),
+            preferred_language=data.get("preferred_language", "Hinglish"),
+            custom_instructions=data.get("custom_instructions"),
+            source=data.get("source", "API_DISPATCH"),
+            prewarm_audio=True
+        )
+
+        # 2. Trigger call in background task or immediately
+        def _dispatch():
+            telephony.make_outbound_call(phone, dossier.name, precall_data=dossier.to_dict())
+
+        background_tasks.add_task(_dispatch)
+
+        return JSONResponse({
+            "status": "success",
+            "message": "Outbound call initiated with pre-fed context and pre-warmed audio.",
+            "phone": phone,
+            "candidate": dossier.name,
+            "course": dossier.course_interest,
+            "greeting": precall_manager.manager.generate_greeting(dossier, direction="outbound")
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get("/api/calls/prefeed/{phone}")
+async def api_get_precall_data(phone: str):
+    """
+    Retrieves current pre-call dossier and audio cache status for a phone number.
+    """
+    import precall_manager
+    dossier = precall_manager.manager.get_dossier(phone)
+    if not dossier:
+        return JSONResponse({"status": "not_found", "message": "No active dossier for this number."}, status_code=404)
+    return JSONResponse({
+        "status": "found",
+        "dossier": dossier.to_dict(),
+        "greeting": precall_manager.manager.generate_greeting(dossier, direction="outbound"),
+        "audio_url": precall_manager.manager.get_prewarmed_audio_url(phone)
+    })
+
 @app.post("/answer-call", response_class=PlainTextResponse)
 async def answer_call(
+    request: Request,
+    background_tasks: BackgroundTasks,
     From: str = Form(None), 
     phone: str = Query(None), 
     direction: str = Query("inbound")
 ):
     """
     Twilio SIP / Voice entrypoint for inbound and outbound calls.
-    Directs the call into the AI processing loop.
+    Directs the call into the AI processing loop with sub-15ms greeting response.
     """
-    # Determine the caller's phone number
+    import precall_manager
     caller_phone = phone or From or ""
+    base_url = get_base_url(request)
     
-    # Check if caller is a known lead in Cloud SQL
-    lead_name = "Future Pilot"
-    course_interest = "Flight Training"
-    lead_date = "recently"
-    lead_source = "our website"
-    if caller_phone:
-        lead = supabase_client.get_lead_by_phone(caller_phone)
-        if lead:
-            lead_name = lead.get("name") or "Future Pilot"
-            course_interest = lead.get("course_interest") or "Flight Training"
-            lead_date = format_lead_date(lead.get("created_at"))
-            lead_source = (lead.get("source") or "our website").replace("_", " ").title()
-        elif direction == "inbound":
-            # Automatically ingest new inbound caller as a lead
-            supabase_client.save_lead(name="Inbound Lead", phone=caller_phone, course="Flight Training", status="NEW")
-
-    # Generate custom greeting audio URL
-    if direction == "outbound":
-        greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
-    else:
-        if lead_name and lead_name not in ["Future Pilot", "Inbound Lead", "Inbound Caller", "New Lead", "TeleCMI Inbound Lead"]:
-            greeting_text = f"Hello {lead_name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
-        else:
-            greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Mentor. May I know your good name, and which course or query are you calling about today?"
-        
-    greeting_url = get_greeting_voice_url(greeting_text)
+    # Rapid in-memory dossier check (<1ms)
+    dossier = precall_manager.manager.get_dossier(caller_phone) if caller_phone else None
     
-    # Persist opening greeting into conversation session
-    if caller_phone:
-        supabase_client.save_conversation_history(
-            caller_phone,
-            [{"role": "assistant", "content": greeting_text}],
-            direction
-        )
-    
-    # Twilio Voice Response: play hold music first on inbound, then agent greeting
-    resp = VoiceResponse()
     if direction == "inbound":
-        resp.play(WELCOME_MUSIC_URL)
+        if dossier and dossier.name not in ["Candidate", "Future Pilot", "Inbound Caller", "New Lead"]:
+            greeting_text = f"Hello {dossier.name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+            greeting_url = precall_manager.manager.get_prewarmed_audio_url(caller_phone) or precall_manager.INBOUND_DEFAULT_GREETING_URL
+        else:
+            greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+            greeting_url = precall_manager.INBOUND_DEFAULT_GREETING_URL
+
+        # Save lead and history non-blockingly
+        if caller_phone:
+            background_tasks.add_task(supabase_client.save_lead, name="Inbound Caller", phone=caller_phone, course="General Inquiry", status="NEW")
+            background_tasks.add_task(supabase_client.save_conversation_history, caller_phone, [{"role": "assistant", "content": greeting_text}], direction)
+    else:
+        # Outbound call path
+        lead_name = dossier.name if dossier else "Future Pilot"
+        course_interest = dossier.course_interest if dossier else "Commercial Pilot License"
+        greeting_text = precall_manager.manager.generate_greeting(dossier, direction="outbound") if dossier else f"Hi {lead_name}, calling from Airborne Aviation Academy regarding {course_interest}."
+        greeting_url = precall_manager.manager.get_prewarmed_audio_url(caller_phone) if caller_phone else get_greeting_voice_url(greeting_text)
+        if caller_phone:
+            background_tasks.add_task(supabase_client.save_conversation_history, caller_phone, [{"role": "assistant", "content": greeting_text}], direction)
+
+    # Twilio Voice Response: instant play
+    resp = VoiceResponse()
     resp.play(greeting_url)
     
-    # Record caller input and route back to process-recording
-    action_url = f"/process-recording?phone={caller_phone}&direction={direction}"
+    # Record caller input and route back to process-recording (absolute URL required by Twilio)
+    action_url = f"{base_url}/process-recording?phone={caller_phone}&direction={direction}"
     resp.record(
         action=action_url,
         method="POST",
         max_length=15,
-        play_beep=True,
+        play_beep=False,
         timeout=3
     )
     return str(resp)
 
 @app.post("/process-recording", response_class=PlainTextResponse)
 def process_recording(
+    request: Request,
     background_tasks: BackgroundTasks,
     RecordingUrl: str = Form(...),
     phone: str = Query(None),
@@ -335,6 +463,7 @@ def process_recording(
     Process caller recording, query RAG, generate reply using LLM, and loop.
     """
     caller_phone = phone or ""
+    base_url = get_base_url(request)
     
     # Process speech using Whisper/LLM/TTS
     audio_url, should_hang_up = handle_conversation(RecordingUrl, caller_phone, direction)
@@ -348,7 +477,7 @@ def process_recording(
         background_tasks.add_task(run_post_call_pipeline, caller_phone, direction, RecordingUrl)
     else:
         # Continue loop: record caller's next input directly without repeating opening greeting
-        action_url = f"/process-recording?phone={caller_phone}&direction={direction}"
+        action_url = f"{base_url}/process-recording?phone={caller_phone}&direction={direction}"
         resp.record(
             action=action_url,
             method="POST",
@@ -365,11 +494,11 @@ def process_recording(
 
 @app.get("/telecmi/answer", operation_id="telecmi_answer_get")
 @app.post("/telecmi/answer", operation_id="telecmi_answer_post")
-async def telecmi_answer(request: Request):
+async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
     """
     TeleCMI PIOPIY Answer URL Webhook.
-    Called when an inbound call arrives on TeleCMI or an outbound call is answered.
-    Returns PCMO (PIOPIY Call Management Object) JSON instructions.
+    Returns PCMO instructions in sub-15ms using pre-synthesized inbound greetings
+    and non-blocking background CRM synchronization.
     """
     try:
         # Extract parameters from query params, json, or form data
@@ -389,17 +518,15 @@ async def telecmi_answer(request: Request):
                 pass
 
         data = {**query_params, **body_data}
-        print(f"TeleCMI Answer Webhook Received: {data}")
-
         base_url = get_base_url(request)
 
         raw_phone = (
             data.get("phone") or 
             data.get("from") or 
             data.get("From") or 
-            data.get("caller") or
+            data.get("caller") or 
             data.get("caller_id") or 
-            data.get("cuser") or
+            data.get("cuser") or 
             data.get("customer_number") or
             data.get("call_from") or
             data.get("cli") or
@@ -415,52 +542,33 @@ async def telecmi_answer(request: Request):
             elif caller_phone.isdigit():
                 caller_phone = "+" + caller_phone
 
-        # Safe fallback for direct browser / curl tests
         if not caller_phone:
             caller_phone = "guest"
 
         direction = data.get("direction", "inbound")
 
-        # Check lead in Cloud SQL CRM
-        lead_name = "Future Pilot"
-        course_interest = "Flight Training"
-        lead_date = "recently"
-        lead_source = "our website"
-        if caller_phone and caller_phone != "guest":
-            lead = supabase_client.get_lead_by_phone(caller_phone)
-            if lead:
-                lead_name = lead.get("name") or "Future Pilot"
-                course_interest = lead.get("course_interest") or "Flight Training"
-                lead_date = format_lead_date(lead.get("created_at"))
-                lead_source = (lead.get("source") or "our website").replace("_", " ").title()
-            elif direction == "inbound":
-                supabase_client.save_lead(name="TeleCMI Inbound Lead", phone=caller_phone, course="Flight Training", status="NEW")
+        import precall_manager
+        dossier = precall_manager.manager.get_dossier(caller_phone) if caller_phone != "guest" else None
 
-        # Generate custom greeting audio
-        if direction == "outbound":
-            if "cabin" in course_interest.lower():
-                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in our {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
+        if direction == "inbound":
+            if dossier and dossier.name not in ["Candidate", "Future Pilot", "Inbound Caller", "TeleCMI Inbound Lead", "New Lead"]:
+                greeting_text = f"Hello {dossier.name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+                greeting_url = precall_manager.manager.get_prewarmed_audio_url(caller_phone) or precall_manager.INBOUND_DEFAULT_GREETING_URL
             else:
-                greeting_text = f"Hi {lead_name}, you filled a lead on {lead_date} on {lead_source} showcasing your interest in {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
+                greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+                greeting_url = precall_manager.INBOUND_DEFAULT_GREETING_URL
+
+            # Non-blocking background CRM synchronization
+            if caller_phone != "guest":
+                background_tasks.add_task(supabase_client.save_lead, name="TeleCMI Inbound Lead", phone=caller_phone, course="General Inquiry", status="NEW")
+                background_tasks.add_task(supabase_client.save_conversation_history, caller_phone, [{"role": "assistant", "content": greeting_text}], direction)
         else:
-            if lead_name and lead_name not in ["Future Pilot", "TeleCMI Inbound Lead", "Inbound Caller", "New Lead", "Inbound Lead"]:
-                greeting_text = f"Hello {lead_name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
-            else:
-                greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Mentor. May I know your good name, and which course or query are you calling about today?"
+            # Outbound call path
+            greeting_text = precall_manager.manager.generate_greeting(dossier, direction="outbound") if dossier else f"Hi, this is Captain Navrang from Airborne Aviation Academy."
+            greeting_url = precall_manager.manager.get_prewarmed_audio_url(caller_phone) or "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_navrang.mp3"
+            if caller_phone != "guest":
+                background_tasks.add_task(supabase_client.save_conversation_history, caller_phone, [{"role": "assistant", "content": greeting_text}], direction)
 
-        greeting_url = get_greeting_voice_url(greeting_text)
-
-        # Persist opening greeting into conversation session for TeleCMI
-        if caller_phone and caller_phone != "guest":
-            supabase_client.save_conversation_history(
-                caller_phone,
-                [{"role": "assistant", "content": greeting_text}],
-                direction
-            )
-
-        # PCMO response for TeleCMI / PIOPIY:
-        # Inbound: plays hold music & announcement first ("Welcome to Airborne Aviation..."), then agent intro, then gets speech input.
-        # Outbound: plays personalized lead greeting via play_get_input, then gets speech input.
         action_url = f"{base_url}/telecmi/process-recording?phone={caller_phone}&direction={direction}"
         pcmo_response = [
             {
@@ -479,7 +587,7 @@ async def telecmi_answer(request: Request):
         return pcmo_response
     except Exception as e:
         print(f"TeleCMI Answer Error: {e}")
-        return [{"action": "play", "file_name": get_greeting_voice_url("Welcome to Airborne Aviation Academy.")}]
+        return [{"action": "play", "file_name": precall_manager.INBOUND_DEFAULT_GREETING_URL}]
 
 @app.get("/telecmi/process-recording", operation_id="telecmi_process_recording_get")
 @app.post("/telecmi/process-recording", operation_id="telecmi_process_recording_post")

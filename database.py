@@ -122,6 +122,7 @@ def init_db():
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
                     ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'ACTIVE';
+                    DO $$ BEGIN ALTER TYPE "LeadSource" ADD VALUE IF NOT EXISTS 'VOICE_AGENT'; EXCEPTION WHEN undefined_object THEN NULL; END $$;
                 """
                 try:
                     cur.execute(migration_sql)
@@ -269,7 +270,7 @@ def save_lead(
     VALID_LEAD_SOURCES = {
         'HOMEPAGE_CTA', 'COURSE_PAGE', 'CONTACT_FORM', 'CALLBACK_REQUEST', 
         'BROCHURE_DOWNLOAD', 'GOOGLE_ADS', 'FACEBOOK_ADS', 'ORGANIC', 'REFERRAL', 
-        'WHATSAPP', 'DIRECT'
+        'WHATSAPP', 'DIRECT', 'VOICE_AGENT'
     }
 
     clean_status = (status or "NEW").upper()
@@ -278,7 +279,9 @@ def save_lead(
 
     clean_source = (source or "DIRECT").upper()
     if clean_source not in VALID_LEAD_SOURCES:
-        if "FACEBOOK" in clean_source:
+        if "VOICE" in clean_source or "CALL" in clean_source:
+            clean_source = "VOICE_AGENT"
+        elif "FACEBOOK" in clean_source:
             clean_source = "FACEBOOK_ADS"
         elif "GOOGLE" in clean_source:
             clean_source = "GOOGLE_ADS"

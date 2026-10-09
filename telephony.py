@@ -1,5 +1,7 @@
 import requests
 import config
+import database
+import supabase_client
 
 try:
     from twilio.rest import Client
@@ -11,10 +13,11 @@ try:
 except ImportError:
     piopiy = None
 
-def make_outbound_call(phone_number: str, lead_name: str) -> bool:
+def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: dict = None) -> bool:
     """
     Triggers an outbound call using PioPiy / TeleCMI (primary) or Twilio (fallback).
     Bridges the call to the FastAPI '/telecmi/answer' or '/answer-call' endpoints.
+    Accepts precall_data to pre-feed lead information, pre-warm audio, and eliminate latency.
     """
     # Normalize phone number (ensure country code)
     clean_digits = "".join(filter(str.isdigit, phone_number))
@@ -28,8 +31,38 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
         formatted_phone = "+" + clean_digits if not phone_number.startswith("+") else phone_number
         telecmi_to = clean_digits
             
-    print(f"Telephony: Initiating outbound call to {lead_name} at {formatted_phone}...")
+    print(f"Telephony: Initiating outbound call to {lead_name or 'Candidate'} at {formatted_phone}...")
     
+    # 0. Register & pre-warm pre-call context
+    import precall_manager
+    if precall_data and isinstance(precall_data, dict):
+        dossier = precall_manager.manager.register_precall(
+            phone=formatted_phone,
+            name=lead_name or precall_data.get("name") or "Candidate",
+            course_interest=precall_data.get("course_interest") or "Commercial Pilot License (CPL)",
+            education=precall_data.get("education"),
+            age=precall_data.get("age"),
+            city=precall_data.get("city"),
+            prior_aviation_exp=precall_data.get("prior_aviation_exp"),
+            medicals_status=precall_data.get("medicals_status"),
+            budget_or_loan=precall_data.get("budget_or_loan"),
+            notes=precall_data.get("notes"),
+            call_objective=precall_data.get("call_objective"),
+            preferred_language=precall_data.get("preferred_language", "Hinglish"),
+            custom_instructions=precall_data.get("custom_instructions"),
+            source=precall_data.get("source", "OUTBOUND_CALL"),
+            prewarm_audio=True
+        )
+    else:
+        dossier = precall_manager.manager.get_dossier(formatted_phone)
+        if not dossier:
+            dossier = precall_manager.manager.register_precall(
+                phone=formatted_phone,
+                name=lead_name or "Candidate",
+                source="OUTBOUND_CALL",
+                prewarm_audio=True
+            )
+
     # 1. Piopiy PCMO Developer App (Primary using app_id e65072de and Token)
     app_id = (
         getattr(config, "AGENT_ID", "")
@@ -50,31 +83,15 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
                 caller_id = raw_caller or "917943446755"
 
             # Dynamic personalized greeting audio for the lead
-            greeting_url = "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_navrang.mp3"
+            greeting_text = precall_manager.manager.generate_greeting(dossier, direction="outbound")
+            greeting_url = precall_manager.manager.get_prewarmed_audio_url(formatted_phone) or "https://storage.googleapis.com/airborne-aviation-media-prod/tts-audio/greeting_navrang.mp3"
             try:
-                import database
                 import assistant
-                lead = database.get_lead_by_phone(formatted_phone)
-                resolved_name = (lead.get("name") if lead else None) or lead_name or "Future Aviation Professional"
-                course_interest = (lead.get("course_interest") if lead else None) or "Aviation Programs"
-                source_str = ((lead.get("source") if lead else None) or "Facebook Ads").replace("_", " ").title()
+                if not precall_manager.manager.get_prewarmed_audio_url(formatted_phone):
+                    print(f"Telephony: Synthesizing personalized greeting: '{greeting_text}'")
+                    greeting_url = assistant.get_greeting_voice_url(greeting_text)
                 
-                created_at = lead.get("created_at") if lead else None
-                if created_at:
-                    day = created_at.day
-                    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-                    lead_date_str = f"{day}{suffix} {created_at.strftime('%B')}"
-                else:
-                    lead_date_str = "recently"
-
-                if "cabin" in course_interest.lower():
-                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in our {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your cabin crew training today?"
-                else:
-                    greeting_text = f"Hi {resolved_name}, you filled a lead on {lead_date_str} on {source_str} showcasing your interest in {course_interest}. I am Captain Navrang from Airborne Aviation Academy Dwarka. How can I help you regarding your pilot training today?"
-
-                print(f"Telephony: Synthesizing personalized greeting: '{greeting_text}'")
-                greeting_url = assistant.get_greeting_voice_url(greeting_text)
-                database.save_conversation_history(
+                supabase_client.save_conversation_history(
                     formatted_phone,
                     [{"role": "assistant", "content": greeting_text}],
                     "outbound"
@@ -104,9 +121,10 @@ def make_outbound_call(phone_number: str, lead_name: str) -> bool:
                 res = client.ai.call(
                     caller_id=caller_id,
                     to_number=telecmi_to,
-                    agent_id=app_id
+                    agent_id=app_id,
+                    variables=dossier.to_dict()
                 )
-                print(f"Telephony: PioPiy AI call dispatched: {res}")
+                print(f"Telephony: PioPiy AI call dispatched with pre-call variables: {res}")
                 return True
             except Exception as ai_err:
                 print(f"Telephony: AI call failed ({ai_err}), attempting client.pcmo.call fallback...")

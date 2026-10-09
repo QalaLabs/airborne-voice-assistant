@@ -26,6 +26,9 @@ def cleanup_old_audio_files(max_age_seconds: int = 3600):
     except Exception:
         pass
 
+# Persistent session for low-latency keep-alive connections to ElevenLabs
+_tts_session = requests.Session()
+
 def speak_and_get_url(text: str) -> str:
     """
     Synthesizes the text to speech using ElevenLabs API or edge-tts.
@@ -41,18 +44,18 @@ def speak_and_get_url(text: str) -> str:
     api_key = (config.ELEVENLABS_API_KEY or "").strip()
     voice_id = (config.ELEVENLABS_VOICE_ID or "").strip() or "eJTrVjiaPKqBMpMujQdM"
     if use_elevenlabs and api_key and voice_id:
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?optimize_streaming_latency=4"
         headers = {
             "xi-api-key": api_key,
             "Content-Type": "application/json"
         }
         payload = {
             "text": text,
-            "model_id": config.ELEVENLABS_MODEL_ID or "eleven_multilingual_v2",
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.8}
+            "model_id": config.ELEVENLABS_MODEL_ID or "eleven_flash_v2_5",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
         }
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+            resp = _tts_session.post(url, json=payload, headers=headers, timeout=10)
             resp.raise_for_status()
             return storage_service.upload_audio_bytes(resp.content, blob_name)
         except Exception as e:
@@ -71,24 +74,22 @@ def speak_and_get_url(text: str) -> str:
             await communicate.save(local_path)
             
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    pool.submit(lambda: asyncio.run(_synthesize())).result()
-            else:
-                loop.run_until_complete(_synthesize())
-        except RuntimeError:
             asyncio.run(_synthesize())
+        except RuntimeError:
+            # Running loop in current thread; execute in dedicated worker thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(lambda: asyncio.run(_synthesize())).result()
             
         return storage_service.upload_audio_file(local_path, blob_name)
     except Exception as e:
         print(f"TTS Error (edge-tts): {e}")
 
-    # Fallback / Mock audio response (valid MPEG 1 Layer III silent frame header)
+    # Fallback / Mock audio response: Valid MPEG-1 Layer III 128kbps 44.1kHz silence frames
     try:
-        silent_frame = b"\xff\xfb\x90\x64" + b"\x00" * 140
-        return storage_service.upload_audio_bytes(silent_frame * 10, blob_name)
+        # Standard 417-byte MPEG 1 Layer III frame (4 byte header + 32 byte side info + data)
+        silent_frame = b"\xff\xfb\x90\x00" + b"\x00" * 32 + b"\x55" * 381
+        return storage_service.upload_audio_bytes(silent_frame * 38, blob_name)
     except Exception as e:
         print(f"TTS Fallback failed: {e}")
         return ""

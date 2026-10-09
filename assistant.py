@@ -2,6 +2,7 @@ import time
 import os
 import json
 import re
+import threading
 from voice_test import listen
 from tts_test import speak_and_get_url
 from gpt_test import chat_with_gpt
@@ -176,11 +177,20 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
         audio_url = speak_and_get_url(response_text.replace("[EXIT]", "").strip())
         return audio_url, True
 
-    # 7. Selective RAG Knowledge Retrieval
+    # 7. Pre-call Dossier & Selective Knowledge Retrieval
+    import precall_manager
+    dossier = precall_manager.manager.get_dossier(phone)
+    
     t_rag_start = time.time()
-    if should_retrieve_knowledge(caller_input):
+    if dossier:
+        # Pre-compiled dossier already has course cheat-sheet baked in (Zero RAG lag)
+        base_instructions = precall_manager.manager.compile_system_prompt(dossier, direction=direction)
+        context = "Pre-loaded course dossier and curriculum active."
+    elif should_retrieve_knowledge(caller_input):
+        base_instructions = SYSTEM_PROMPT
         context = rag.query_rag(caller_input)
     else:
+        base_instructions = SYSTEM_PROMPT
         context = "User provided conversational acknowledgement/greeting. Provide warm, brief response and offer campus visit or counseling."
     t_rag = time.time() - t_rag_start
 
@@ -197,7 +207,7 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
             print(f"Agent Engine query failed ({e}). Falling back to direct LLM path for this turn.")
 
     if ai_response is None:
-        dynamic_system_prompt = f"{SYSTEM_PROMPT}\n\nRELEVANT WEBSITE CONTEXT:\n{context}"
+        dynamic_system_prompt = f"{base_instructions}\n\nRELEVANT CONTEXT:\n{context}"
         ai_response = chat_with_gpt(caller_input, pruned_history, dynamic_system_prompt)
 
     if not ai_response:
@@ -249,6 +259,7 @@ def clear_session(phone: str):
     supabase_client.clear_conversation_history(phone)
 
 _active_pipelines = set()
+_pipelines_lock = threading.Lock()
 
 def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
     """
@@ -260,11 +271,11 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
     Guarded against duplicate / concurrent pipeline execution.
     """
     cleaned_phone = phone.replace(" ", "").replace("-", "")
-    if cleaned_phone in _active_pipelines:
-        print(f"Post-Call: Pipeline already executing for {cleaned_phone}. Skipping duplicate trigger.")
-        return
-
-    _active_pipelines.add(cleaned_phone)
+    with _pipelines_lock:
+        if cleaned_phone in _active_pipelines:
+            print(f"Post-Call: Pipeline already executing for {cleaned_phone}. Skipping duplicate trigger.")
+            return
+        _active_pipelines.add(cleaned_phone)
     try:
         print(f"Post-Call: Starting pipeline for {phone}...")
         transcript = get_transcript_string(phone)
@@ -428,5 +439,6 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
         clear_session(phone)
         print(f"Post-Call: Pipeline completed for {phone}.")
     finally:
-        _active_pipelines.discard(cleaned_phone)
+        with _pipelines_lock:
+            _active_pipelines.discard(cleaned_phone)
 
