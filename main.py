@@ -33,6 +33,8 @@ async def lifespan(app: FastAPI):
             worker_task = asyncio.create_task(piopiy_agent_worker.run_worker())
             print("🚀 Piopiy AI Agent Worker background task launched.")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Notice starting piopiy_agent_worker: {e}")
 
     yield

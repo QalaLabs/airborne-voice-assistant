@@ -236,11 +236,14 @@ class ResilientGoogleLLMService(GoogleLLMService):
 # Global persistent ElevenLabs TTS instance
 global_eleven_tts = None
 if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
-    global_eleven_tts = FastStreamingElevenLabsTTS(
-        api_key=config.ELEVENLABS_API_KEY,
-        voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
-        sample_rate=24000
-    )
+    try:
+        global_eleven_tts = FastStreamingElevenLabsTTS(
+            api_key=config.ELEVENLABS_API_KEY,
+            voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
+            sample_rate=24000
+        )
+    except Exception as e:
+        logger.warning(f"Could not initialize global ElevenLabs TTS: {e}")
 
 # -------------------------------------------------------------
 # 2. Compact Core Knowledge Base & Conversational Instructions
@@ -282,90 +285,100 @@ GREETING_MESSAGE = "Hello! This is Captain Navrang from Airborne Aviation Academ
 shared_stt = None
 shared_vad = None
 
-if WhisperSTTService and SileroVADAnalyzer:
-    print("==================================================================")
-    print(f"Initializing Ultra-Low-Latency Airborne Voice Worker for Agent ID: {AGENT_ID}")
-    print("Configuring Whisper STT (BASE Model, 8 CPU threads, greedy decode) & Silero VAD (400ms)...")
+def init_audio_stack():
+    global shared_stt, shared_vad
+    if shared_stt is not None and shared_vad is not None:
+        return
 
-    shared_stt = WhisperSTTService(
-        model=Model.BASE,
-        device="cpu",
-        compute_type="int8",
-        language=Language.EN
-    )
+    if WhisperSTTService and SileroVADAnalyzer:
+        print("==================================================================")
+        print(f"Initializing Ultra-Low-Latency Airborne Voice Worker for Agent ID: {AGENT_ID}")
+        print("Configuring Whisper STT & Silero VAD...")
 
-    # Re-initialize Faster-Whisper with 8 CPU threads and 2 workers for 2.5x faster inference
-    try:
-        from faster_whisper import WhisperModel
-        shared_stt._model = WhisperModel(
-            "base",
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=8,
-            num_workers=2
-        )
-    except Exception as me:
-        logger.warning(f"Could not re-initialize whisper with 8 threads: {me}")
-
-    # Greedy single-pass decoding without heavy prompt overhead for snappy 500ms turnaround
-    try:
-        import functools
-        if hasattr(shared_stt, "_model") and hasattr(shared_stt._model, "transcribe"):
-            shared_stt._model.transcribe = functools.partial(
-                shared_stt._model.transcribe,
-                language="en",
-                beam_size=1,
-                best_of=1,
-                temperature=0.0,
-                condition_on_previous_text=False,
-                initial_prompt="Airborne Aviation, CPL, DGCA."
+        try:
+            shared_stt = WhisperSTTService(
+                model=getattr(Model, "BASE", "base") if Model else "base",
+                device="cpu",
+                compute_type="int8",
+                language=getattr(Language, "EN", "en") if Language else "en"
             )
-    except Exception as e:
-        logger.warning(f"Could not wrap whisper transcribe: {e}")
+        except Exception as se:
+            logger.error(f"Error initializing WhisperSTTService: {se}")
 
-    # Domain-specific phonetic normalization to fix telephony acoustic distortions
-    PHONETIC_REPLACEMENTS = {
-        "mad and tensed": "Maths and Physics",
-        "maths and tensed": "Maths and Physics",
-        "math and tensed": "Maths and Physics",
-        "murdered industry": "10+2 schooling",
-        "modern industry": "10+2 schooling",
-        "murdered": "10+2",
-        "tenth plus two": "10+2",
-        "ten plus two": "10+2",
-        "10 plus 2": "10+2",
-        "cpl licence": "Commercial Pilot License (CPL)",
-        "cpl license": "Commercial Pilot License (CPL)",
-        "type rated": "A320 Type Rating",
-        "type rating": "A320 Type Rating",
-    }
+        if shared_stt:
+            # Re-initialize Faster-Whisper with 4 CPU threads and 2 workers for fast inference
+            try:
+                from faster_whisper import WhisperModel
+                shared_stt._model = WhisperModel(
+                    "base",
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=4,
+                    num_workers=2
+                )
+            except Exception as me:
+                logger.warning(f"Could not re-initialize whisper with 4 threads: {me}")
 
-    orig_handle_transcription = shared_stt._handle_transcription
-    async def logged_handle_transcription(text, is_final, language):
-        if text and text.strip():
-            normalized_text = text.strip()
-            lower_t = normalized_text.lower()
-            for k, v in PHONETIC_REPLACEMENTS.items():
-                if k in lower_t:
-                    import re
-                    normalized_text = re.sub(re.escape(k), v, normalized_text, flags=re.IGNORECASE)
-            logger.info(f"🗣️ Caller Said: '{normalized_text}' (raw: '{text.strip()}')")
-            return await orig_handle_transcription(normalized_text, is_final, language)
-        return await orig_handle_transcription(text, is_final, language)
-    shared_stt._handle_transcription = logged_handle_transcription
+            # Greedy single-pass decoding without heavy prompt overhead for snappy turnaround
+            try:
+                import functools
+                if hasattr(shared_stt, "_model") and hasattr(shared_stt._model, "transcribe"):
+                    shared_stt._model.transcribe = functools.partial(
+                        shared_stt._model.transcribe,
+                        language="en",
+                        beam_size=1,
+                        best_of=1,
+                        temperature=0.0,
+                        condition_on_previous_text=False,
+                        initial_prompt="Airborne Aviation, CPL, DGCA."
+                    )
+            except Exception as e:
+                logger.warning(f"Could not wrap whisper transcribe: {e}")
 
-    # Low-Network & Interruption-tuned VAD:
-    # 0.55s silence window allows natural pauses on jittery networks without premature cutting,
-    # while 0.15s start_secs immediately triggers pause when the caller speaks.
-    shared_vad = SileroVADAnalyzer(
-        params=VADParams(
-            start_secs=0.15,
-            stop_secs=0.55,
-            confidence=0.65,
-            min_volume=0.35
-        )
-    )
-    print("Whisper STT (BASE, 8 threads, greedy) & Silero VAD (tuned for low-network & barge-in) armed!")
+            # Domain-specific phonetic normalization to fix telephony acoustic distortions
+            PHONETIC_REPLACEMENTS = {
+                "mad and tensed": "Maths and Physics",
+                "maths and tensed": "Maths and Physics",
+                "math and tensed": "Maths and Physics",
+                "murdered industry": "10+2 schooling",
+                "modern industry": "10+2 schooling",
+                "murdered": "10+2",
+                "tenth plus two": "10+2",
+                "ten plus two": "10+2",
+                "10 plus 2": "10+2",
+                "cpl licence": "Commercial Pilot License (CPL)",
+                "cpl license": "Commercial Pilot License (CPL)",
+                "type rated": "A320 Type Rating",
+                "type rating": "A320 Type Rating",
+            }
+
+            orig_handle_transcription = getattr(shared_stt, "_handle_transcription", None)
+            if orig_handle_transcription:
+                async def logged_handle_transcription(text, is_final, language):
+                    if text and text.strip():
+                        normalized_text = text.strip()
+                        lower_t = normalized_text.lower()
+                        for k, v in PHONETIC_REPLACEMENTS.items():
+                            if k in lower_t:
+                                import re
+                                normalized_text = re.sub(re.escape(k), v, normalized_text, flags=re.IGNORECASE)
+                        logger.info(f"🗣️ Caller Said: '{normalized_text}' (raw: '{text.strip()}')")
+                        return await orig_handle_transcription(normalized_text, is_final, language)
+                    return await orig_handle_transcription(text, is_final, language)
+                shared_stt._handle_transcription = logged_handle_transcription
+
+        # Low-Network & Interruption-tuned VAD
+        try:
+            vad_params = VADParams(
+                start_secs=0.15,
+                stop_secs=0.55,
+                confidence=0.65,
+                min_volume=0.35
+            ) if VADParams else None
+            shared_vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
+            print("Whisper STT (BASE, 4 threads, greedy) & Silero VAD (tuned for low-network & barge-in) armed!")
+        except Exception as ve:
+            logger.error(f"Error initializing SileroVADAnalyzer: {ve}")
 
 def resolve_call_context(kwargs: dict):
     """
@@ -633,15 +646,17 @@ async def create_session(
     except Exception as pe:
         logger.error(f"Error persisting call history / post-call pipeline: {pe}")
 
-if Agent:
-    agent = Agent(
-        agent_id=AGENT_ID,
-        agent_token=AGENT_TOKEN,
-        create_session=create_session,
-        debug=True,
-    )
-else:
-    agent = None
+agent = None
+if Agent and AGENT_ID and AGENT_TOKEN:
+    try:
+        agent = Agent(
+            agent_id=AGENT_ID,
+            agent_token=AGENT_TOKEN,
+            create_session=create_session,
+            debug=True,
+        )
+    except Exception as e:
+        logger.warning(f"Notice creating Piopiy Agent instance: {e}")
 
 async def prewarm_services():
     """Pre-warm Gemini API socket and pre-cache greeting audio to avoid cold-start latency."""
@@ -649,13 +664,19 @@ async def prewarm_services():
     try:
         from google import genai
         client = genai.Client(api_key=config.GEMINI_API_KEY)
+        
+        cfg_kwargs = {"max_output_tokens": 5}
+        try:
+            tc_cls = getattr(genai.types, "ThinkingConfig", None)
+            if tc_cls and callable(tc_cls) and tc_cls is not type(None):
+                cfg_kwargs["thinking_config"] = tc_cls(thinking_budget=0)
+        except Exception:
+            pass
+
         client.models.generate_content(
             model=model_name,
             contents="hello",
-            config=genai.types.GenerateContentConfig(
-                max_output_tokens=5,
-                thinking_config=genai.types.ThinkingConfig(thinking_budget=0)
-            )
+            config=genai.types.GenerateContentConfig(**cfg_kwargs)
         )
         print(f"Pre-warmed Gemini API SSL keep-alive socket ({model_name}).")
     except Exception as e:
@@ -676,7 +697,11 @@ async def prewarm_services():
                 logger.warning(f"Could not pre-cache greeting: {ge}")
 
 async def run_worker():
+    init_audio_stack()
     await prewarm_services()
+    if not agent:
+        print("⚠️ Piopiy Agent instance is not initialized (check Agent token/ID). Worker cannot start.")
+        return
     retry_delay = 3
     while True:
         try:
