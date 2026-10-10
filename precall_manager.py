@@ -241,10 +241,22 @@ class PreCallManager:
                 return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
             return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
         
-        if "type rating" in course.lower() or "a320" in course.lower() or (dossier.prior_aviation_exp and "cpl" in dossier.prior_aviation_exp.lower()):
+        is_holding_cpl = False
+        if dossier.prior_aviation_exp:
+            exp_l = dossier.prior_aviation_exp.lower()
+            if not any(neg in exp_l for neg in ["non", "no ", "not", "without", "none", "pursuing", "zero", "aspiring", "don't"]):
+                if "cpl" in exp_l or "license" in exp_l or "licence" in exp_l or "type rated" in exp_l:
+                    is_holding_cpl = True
+
+        if is_holding_cpl or "type rating" in course.lower() or "a320" in course.lower():
             if name:
                 return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
             return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
+
+        if "interview" in course.lower() or "airline prep" in course.lower():
+            if name:
+                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
+            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
 
         # Standard Pilot Training / CPL inquiry
         if name:
@@ -320,10 +332,26 @@ INBOUND CONVERSATIONAL DIRECTIVES:
 
         # Outbound call path
         course_lower = (dossier.course_interest or "").lower()
+        prior_exp_lower = (dossier.prior_aviation_exp or "").lower()
+        is_holding_cpl = False
+        if dossier.prior_aviation_exp:
+            if not any(neg in prior_exp_lower for neg in ["non", "no ", "not", "without", "none", "pursuing", "zero", "aspiring", "don't"]):
+                if "cpl" in prior_exp_lower or "license" in prior_exp_lower or "licence" in prior_exp_lower or "type rated" in prior_exp_lower:
+                    is_holding_cpl = True
+
         if "cabin" in course_lower:
             knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"]
-        elif "a320" in course_lower or "type" in course_lower or "airline" in course_lower:
+        elif is_holding_cpl:
             knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["a320"]
+        elif "a320" in course_lower or "type rating" in course_lower:
+            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["a320"]
+        elif "interview" in course_lower or "airline" in course_lower:
+            # Non-CPL holder inquiring about airline interview prep:
+            # Provide CPL Ground School knowledge (the required foundation) + A320 simulator info
+            knowledge_snippet = (
+                COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["a320"]
+            )
         elif "sim" in course_lower:
             knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["simulator"]
         else:
@@ -349,8 +377,18 @@ CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
         # Tailored rules based on dossier
         if dossier.education and ("non" in dossier.education.lower() or "arts" in dossier.education.lower() or "commerce" in dossier.education.lower()):
             dossier_text += "- Candidate is Non-PCM: DO NOT ask if they have Maths/Physics! Immediately reassure them that NIOS (National Institute of Open Schooling) is 100% accepted by DGCA and they can easily clear it alongside ground classes.\n"
-        if dossier.prior_aviation_exp and "cpl" in dossier.prior_aviation_exp.lower():
+        if is_holding_cpl:
             dossier_text += "- Candidate already holds a CPL: NEVER pitch CPL ground classes! Directly discuss A320 Type Rating, simulator sessions in Dwarka, and airline interview preparation.\n"
+        elif any(neg in prior_exp_lower for neg in ["non", "no", "not", "without", "none", "zero"]):
+            dossier_text += (
+                "- CRITICAL - CANDIDATE DOES NOT HOLD A CPL: They inquired about Airline Interview Preparation (e.g. from Facebook), but they do NOT have a CPL yet.\n"
+                "  1. Greet them warmly regarding their inquiry for airline interview preparation.\n"
+                "  2. Clarify gently whether they are aspiring to become an airline pilot or looking at cabin crew.\n"
+                "  3. If pilot: Explain kindly that to sit for airline pilot interviews and selections, a candidate must first clear DGCA exams and obtain a CPL (Commercial Pilot License).\n"
+                "  4. Guide them that the essential starting point is DGCA CPL Ground Training (covering all 5 DGCA papers + RTR aero) at Airborne Aviation Academy, Dwarka under Capt. Navrang (Fee: Rs. 2,70,000), followed by 200 flying hours.\n"
+                "  5. Mention that our Dwarka campus has an onsite Airbus A320 simulator so students get early airline cockpit familiarity from day one.\n"
+                "  6. Invite them to visit the Dwarka campus for counseling and to experience the simulator.\n"
+            )
         if dossier.city and "delhi" in dossier.city.lower():
             dossier_text += f"- Candidate is based in {dossier.city}: Highlight that the academy is right at Ramphal Chowk, Dwarka Sector 7, easily accessible by Metro.\n"
         if dossier.custom_instructions:

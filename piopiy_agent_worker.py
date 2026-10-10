@@ -520,6 +520,16 @@ async def create_session(
                 prior_aviation_exp="Holds CPL",
                 call_objective="Assess flying hours & invite for A320 fixed base simulator trial in Dwarka."
             )
+        elif "6006760151" in caller_str or "0151" in customer_phone or "aashirwad" in caller_str:
+            dossier = precall_manager.PreCallDossier(
+                phone=customer_phone,
+                name="Aashirwad",
+                course_interest="Airline Interview Preparation",
+                prior_aviation_exp="Non-CPL holder",
+                notes="Facebook lead inquiring for Airline Interview Prep; non-CPL holder",
+                call_objective="Acknowledge Facebook inquiry for Airline Interview Prep, clarify pilot vs cabin crew, explain that pilot airline interview prep requires DGCA CPL first, guide to CPL ground school (2.7L) at Dwarka, and invite to campus/A320 sim."
+            )
+
 
     if dossier:
         logger.info(f"⚡ PreCall dossier active for {dossier.name} ({customer_phone}) -> Course: {dossier.course_interest}, Edu: {dossier.education or 'N/A'}")
