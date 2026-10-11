@@ -379,7 +379,7 @@ CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
             dossier_text += "- Candidate is Non-PCM: DO NOT ask if they have Maths/Physics! Immediately reassure them that NIOS (National Institute of Open Schooling) is 100% accepted by DGCA and they can easily clear it alongside ground classes.\n"
         if is_holding_cpl:
             dossier_text += "- Candidate already holds a CPL: NEVER pitch CPL ground classes! Directly discuss A320 Type Rating, simulator sessions in Dwarka, and airline interview preparation.\n"
-        elif any(neg in prior_exp_lower for neg in ["non", "no", "not", "without", "none", "zero"]):
+        elif ("interview" in course_lower or "airline" in course_lower) and any(neg in prior_exp_lower for neg in ["non", "no", "not", "without", "none", "zero"]):
             dossier_text += (
                 "- CRITICAL - CANDIDATE DOES NOT HOLD A CPL: They inquired about Airline Interview Preparation (e.g. from Facebook), but they do NOT have a CPL yet.\n"
                 "  1. Greet them warmly regarding their inquiry for airline interview preparation.\n"

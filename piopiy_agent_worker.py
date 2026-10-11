@@ -524,10 +524,10 @@ async def create_session(
             dossier = precall_manager.PreCallDossier(
                 phone=customer_phone,
                 name="Aashirwad",
-                course_interest="Airline Interview Preparation",
-                prior_aviation_exp="Non-CPL holder",
-                notes="Facebook lead inquiring for Airline Interview Prep; non-CPL holder",
-                call_objective="Acknowledge Facebook inquiry for Airline Interview Prep, clarify pilot vs cabin crew, explain that pilot airline interview prep requires DGCA CPL first, guide to CPL ground school (2.7L) at Dwarka, and invite to campus/A320 sim."
+                course_interest="Commercial Pilot License (CPL)",
+                prior_aviation_exp="None",
+                notes="Google Ads lead inquiring for CPL",
+                call_objective="Provide clear guidance on DGCA CPL requirements and Ground School batch (2.7L) at Dwarka, and invite to campus/A320 sim."
             )
 
 
