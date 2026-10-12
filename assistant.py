@@ -16,7 +16,7 @@ import config
 EXIT_PHRASES = ["goodbye", "thank you", "bye", "exit", "stop", "shukriya", "alvida"]
 
 MAX_TURNS = 12
-MAX_CONSECUTIVE_SILENCE = 3
+MAX_CONSECUTIVE_SILENCE = 2
 
 CONVERSATIONAL_FILLERS = {
     "yes", "yeah", "ok", "okay", "sure", "no", "nope", "hello", "hi", "hey",
@@ -134,9 +134,12 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
     # 3. Guardrail: Consecutive Silence / Connection Issue Circuit Breaker
     if not caller_input or "could not understand" in caller_input.lower():
         # Check if previous turn was also silent
+        # Count trailing silent user turns (history alternates user/assistant)
         consecutive_silence = 1
-        if len(history) >= 2 and history[-2].get("content") == "[Silence/Unrecognized Input]":
-            consecutive_silence = 2
+        idx = len(history) - 2
+        while idx >= 0 and history[idx].get("content") == "[Silence/Unrecognized Input]":
+            consecutive_silence += 1
+            idx -= 2
 
         if consecutive_silence >= MAX_CONSECUTIVE_SILENCE:
             response_text = "It seems we are having audio connection trouble. I will have our senior pilot counselor send all program details directly to your WhatsApp. Have a great day! [EXIT]"
