@@ -404,15 +404,27 @@ async def api_dispatch_call_with_prefeed(request: Request, background_tasks: Bac
             prewarm_audio=True
         )
 
-        # 2. Trigger call in background task or immediately
-        def _dispatch():
-            telephony.make_outbound_call(phone, dossier.name, precall_data=dossier.to_dict())
+        # 2. Dispatch the call now (off the event loop) so a carrier rejection such as
+        #    kyc_not_verified is reported to the caller instead of being logged and lost.
+        import asyncio
+        result = await asyncio.to_thread(
+            telephony.dispatch_outbound_call, phone, dossier.name, dossier.to_dict()
+        )
 
-        background_tasks.add_task(_dispatch)
+        if not result.get("ok"):
+            return JSONResponse({
+                "status": "error",
+                "message": "Outbound call was NOT placed: the carrier rejected it.",
+                "error": result.get("error"),
+                "phone": phone,
+                "candidate": dossier.name
+            }, status_code=502)
 
         return JSONResponse({
             "status": "success",
             "message": "Outbound call initiated with pre-fed context and pre-warmed audio.",
+            "provider": result.get("provider"),
+            "request_id": result.get("request_id"),
             "phone": phone,
             "candidate": dossier.name,
             "course": dossier.course_interest,
