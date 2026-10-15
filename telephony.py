@@ -13,12 +13,35 @@ try:
 except ImportError:
     piopiy = None
 
+def _response_error(res):
+    """Returns an error string if a carrier response body signals failure, else None."""
+    if isinstance(res, dict):
+        status = str(res.get("status", "")).lower()
+        if res.get("error"):
+            return str(res.get("error"))
+        if status in ("error", "failed"):
+            return str(res.get("msg") or res.get("message") or res.get("code") or "carrier reported an error")
+        code = res.get("code")
+        if isinstance(code, int) and code >= 400:
+            return str(res.get("msg") or res.get("message") or code)
+    return None
+
 def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: dict = None) -> bool:
+    """Boolean wrapper around dispatch_outbound_call() for callers that only need success/failure."""
+    return dispatch_outbound_call(phone_number, lead_name, precall_data)["ok"]
+
+def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_data: dict = None) -> dict:
     """
     Triggers an outbound call using PioPiy / TeleCMI (primary) or Twilio (fallback).
     Bridges the call to the FastAPI '/telecmi/answer' or '/answer-call' endpoints.
     Accepts precall_data to pre-feed lead information, pre-warm audio, and eliminate latency.
+
+    Returns {"ok": bool, "provider": str|None, "error": str|None, "request_id": str|None}.
+    ok is True only when a carrier accepted the call (or in simulation mode when NO carrier
+    credentials are configured); a carrier rejection such as kyc_not_verified yields ok=False.
     """
+    errors = []
+    carrier_configured = False
     # Normalize phone number (ensure country code)
     clean_digits = "".join(filter(str.isdigit, phone_number))
     if len(clean_digits) == 10:
@@ -68,19 +91,19 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
         getattr(config, "AGENT_ID", "")
         or config.TELECMI_PIOPIY_APP_ID
         or config.TELECMI_APP_ID
-        or "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
     )
     token = getattr(config, "AGENT_TOKEN", "") or config.TELECMI_TOKEN or ""
 
     if token and app_id:
+        carrier_configured = True
         try:
             from piopiy.voice import RestClient
             client = RestClient(token=token)
-            raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755")))
+            raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "")))
             if len(raw_caller) == 10:
                 caller_id = "91" + raw_caller
             else:
-                caller_id = raw_caller or "917943446755"
+                caller_id = raw_caller
 
             # Dynamic personalized greeting audio for the lead
             greeting_text = precall_manager.manager.generate_greeting(dossier, direction="outbound")
@@ -130,7 +153,11 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
                     variables=clean_variables
                 )
                 print(f"Telephony: PioPiy AI call dispatched with pre-call variables: {res}")
-                return True
+                body_err = _response_error(res)
+                if body_err:
+                    raise RuntimeError(body_err)
+                return {"ok": True, "provider": "piopiy_ai", "error": None,
+                        "request_id": res.get("request") if isinstance(res, dict) else None}
             except Exception as ai_err:
                 print(f"Telephony: AI call failed ({ai_err}), attempting client.pcmo.call fallback...")
                 try:
@@ -141,15 +168,21 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
                         pipeline=pipeline
                     )
                     print(f"Telephony: PioPiy PCMO call dispatched: {res}")
-                    return True
+                    body_err = _response_error(res)
+                    if body_err:
+                        raise RuntimeError(body_err)
+                    return {"ok": True, "provider": "piopiy_pcmo", "error": None,
+                            "request_id": res.get("request") if isinstance(res, dict) else None}
                 except Exception as pcmo_err:
                     print(f"Telephony: PCMO dispatch also failed: {pcmo_err}")
                     raise
         except Exception as e:
             print(f"Telephony Error: PioPiy dispatch error: {e}")
+            errors.append(str(e))
 
     # 1b. TeleCMI Legacy REST API fallback
     if config.TELECMI_APP_ID and config.TELECMI_APP_SECRET:
+        carrier_configured = True
         try:
             base_url = (getattr(config, "APP_URL", "") or getattr(config, "NGROK_URL", "") or "https://airborne-voice-assistant-hehklcowza-el.a.run.app").rstrip("/")
             answer_url = f"{base_url}/telecmi/answer?direction=outbound&phone={formatted_phone}"
@@ -163,10 +196,10 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
                 headers["token"] = config.TELECMI_TOKEN
             
             try:
-                from_num = int("".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755"))))
+                from_num = int("".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or ""))))
                 to_num = int("".join(filter(str.isdigit, str(telecmi_to))))
             except Exception:
-                from_num = config.TELECMI_PHONE_NUMBER or "917943446755"
+                from_num = config.TELECMI_PHONE_NUMBER or ""
                 to_num = telecmi_to
 
             payload = {
@@ -180,15 +213,28 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
             print(f"Telephony: Dispatching TeleCMI REST API call for {formatted_phone}...")
             response = requests.post(telecmi_api_url, json=payload, headers=headers, timeout=10)
             if response.status_code in [200, 201]:
-                print(f"Telephony: TeleCMI call initiated successfully: {response.text}")
-                return True
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = None
+                # TeleCMI reports many failures as HTTP 200 with {"status": "error", "code": ...}.
+                body_err = _response_error(body)
+                if body_err is None:
+                    print(f"Telephony: TeleCMI call initiated successfully: {response.text}")
+                    return {"ok": True, "provider": "telecmi_rest", "error": None,
+                            "request_id": body.get("request_id") if isinstance(body, dict) else None}
+                print(f"Telephony: TeleCMI rejected the call: {response.text}")
+                errors.append(body_err)
             else:
                 print(f"Telephony: TeleCMI returned HTTP {response.status_code}: {response.text}")
+                errors.append(f"HTTP {response.status_code}")
         except Exception as e:
             print(f"Telephony Error: TeleCMI dispatch error: {e}")
+            errors.append(str(e))
 
     # 2. Fallback to Twilio if configured
     if config.TWILIO_ACCOUNT_SID and config.TWILIO_AUTH_TOKEN and Client:
+        carrier_configured = True
         try:
             client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
             twiml_url = f"{config.NGROK_URL}/answer-call?direction=outbound&phone={formatted_phone}"
@@ -199,13 +245,20 @@ def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: d
                 url=twiml_url
             )
             print(f"Telephony: Twilio call created successfully. SID: {call.sid}")
-            return True
+            return {"ok": True, "provider": "twilio", "error": None, "request_id": call.sid}
         except Exception as e:
             print(f"Telephony Error: Failed to create Twilio call: {e}")
-            return False
+            errors.append(str(e))
 
-    # 3. Standalone simulation / mock
+    # Every configured carrier was tried and none accepted the call: report the failure
+    # instead of falling through to simulation mode.
+    if carrier_configured:
+        error = errors[0] if errors else "no carrier accepted the call"
+        print(f"Telephony: Outbound call to {formatted_phone} FAILED: {error}")
+        return {"ok": False, "provider": None, "error": error, "request_id": None}
+
+    # 3. Standalone simulation / mock (only when no carrier credentials exist at all, e.g. local dev)
     print("Telephony (Simulation Mode): Dispatched outbound call signal.")
     print(f"Telephony (Simulation Mode): Route: {config.NGROK_URL}/telecmi/answer?direction=outbound&phone={formatted_phone}")
-    return True
+    return {"ok": True, "provider": "simulation", "error": None, "request_id": None}
 

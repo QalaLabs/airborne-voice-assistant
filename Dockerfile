@@ -19,8 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
+
+# Bake the Faster-Whisper 'base' model into the image so cold starts do not wait on (or fail
+# against) Hugging Face. The second command fails the build if the model can't load offline.
+ENV HF_HOME=/opt/hf-cache
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')"     && HF_HUB_OFFLINE=1 python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')"
+ENV HF_HUB_OFFLINE=1
 
 # Copy application source code
 COPY . .

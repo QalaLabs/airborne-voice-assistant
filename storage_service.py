@@ -69,6 +69,41 @@ def upload_audio_file(local_path: str, destination_blob_name: str, content_type:
     filename = os.path.basename(local_path)
     return f"{base_url}/static/{filename}"
 
+# Hosts (and their subdomains) recordings may be downloaded from. Extend via the
+# RECORDING_HOST_ALLOWLIST env var (comma-separated) if the carrier uses another domain.
+_DEFAULT_RECORDING_HOSTS = ("telecmi.com", "piopiy.com", "twilio.com", "storage.googleapis.com")
+
+def _recording_hosts():
+    extra = [h.strip().lower() for h in os.environ.get("RECORDING_HOST_ALLOWLIST", "").split(",") if h.strip()]
+    return tuple(_DEFAULT_RECORDING_HOSTS) + tuple(extra)
+
+def _host_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+def is_safe_recording_url(url: str) -> bool:
+    """
+    Guards the server-side download of a caller-supplied recording URL (SSRF defence):
+    https only, hostname on the allowlist, and every resolved address must be public.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or not host:
+            return False
+        if not any(_host_matches(host, d) for d in _recording_hosts()):
+            return False
+        for info in socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
+    except Exception:
+        return False
+
 def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> str:
     """
     Downloads call recording from TeleCMI / Twilio and archives it to GCS.
@@ -77,6 +112,10 @@ def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> 
     """
     if not recording_url:
         return ""
+
+    if not is_safe_recording_url(recording_url):
+        print(f"Recording URL rejected (not https / not an allowed carrier host / non-public address): {recording_url}")
+        return recording_url
 
     import time
     import uuid
@@ -87,8 +126,17 @@ def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> 
     if client and GCS_BUCKET_NAME:
         try:
             print(f"Downloading call recording from {recording_url}...")
-            auth = (config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN) if ("twilio" in recording_url and config.TWILIO_ACCOUNT_SID) else None
-            resp = requests.get(recording_url, auth=auth, timeout=30)
+            from urllib.parse import urlparse
+            host = (urlparse(recording_url).hostname or "").lower()
+            # Twilio credentials go only to Twilio's own domain, never to any URL that merely contains "twilio".
+            auth = (config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN) if (_host_matches(host, "twilio.com") and config.TWILIO_ACCOUNT_SID) else None
+            resp = requests.get(recording_url, auth=auth, timeout=30, allow_redirects=False)
+            if resp.is_redirect:
+                # Follow a single redirect, but only to another safe host and without credentials.
+                target = requests.compat.urljoin(recording_url, resp.headers.get("Location", ""))
+                if not is_safe_recording_url(target):
+                    raise ValueError(f"redirect to disallowed URL {target}")
+                resp = requests.get(target, timeout=30, allow_redirects=False)
             resp.raise_for_status()
             
             bucket = client.bucket(GCS_BUCKET_NAME)

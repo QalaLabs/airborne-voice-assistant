@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Request, Form, Query, BackgroundTasks
-from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, Form, Query, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from twilio.twiml.voice_response import VoiceResponse
 import uvicorn
@@ -51,6 +51,25 @@ app = FastAPI(title="Airborne Aviation AI Voice Assistant", lifespan=lifespan)
 # Ensure static directory exists
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+async def require_api_key(request: Request) -> None:
+    """
+    Guards endpoints that place calls or expose/modify lead data.
+    Accepts 'X-API-Key: <secret>' or 'Authorization: Bearer <secret>'.
+    Fails closed (503) when config.API_SHARED_SECRET is not set.
+    """
+    expected = config.API_SHARED_SECRET
+    if not expected:
+        raise HTTPException(status_code=503, detail="API key auth not configured")
+
+    provided = request.headers.get("x-api-key", "")
+    if not provided:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            provided = auth[7:].strip()
+
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="unauthorized")
 
 def get_base_url(request: Request) -> str:
     """
@@ -248,7 +267,7 @@ async def get_new_lead_webhook_info():
         }
     }
 
-@app.post("/webhooks/new-lead")
+@app.post("/webhooks/new-lead", dependencies=[Depends(require_api_key)])
 async def new_lead_webhook(request: Request):
     """
     Webhook triggered when a new lead is submitted on the website or WhatsApp.
@@ -303,7 +322,7 @@ async def new_lead_webhook(request: Request):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-@app.post("/api/calls/prefeed")
+@app.post("/api/calls/prefeed", dependencies=[Depends(require_api_key)])
 async def api_feed_precall_data(request: Request):
     """
     Feeds lead context to the voice agent BEFORE making a call.
@@ -351,7 +370,7 @@ async def api_feed_precall_data(request: Request):
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
-@app.post("/api/calls/dispatch")
+@app.post("/api/calls/dispatch", dependencies=[Depends(require_api_key)])
 async def api_dispatch_call_with_prefeed(request: Request, background_tasks: BackgroundTasks):
     """
     Feeds lead context AND immediately triggers the outbound call.
@@ -385,15 +404,27 @@ async def api_dispatch_call_with_prefeed(request: Request, background_tasks: Bac
             prewarm_audio=True
         )
 
-        # 2. Trigger call in background task or immediately
-        def _dispatch():
-            telephony.make_outbound_call(phone, dossier.name, precall_data=dossier.to_dict())
+        # 2. Dispatch the call now (off the event loop) so a carrier rejection such as
+        #    kyc_not_verified is reported to the caller instead of being logged and lost.
+        import asyncio
+        result = await asyncio.to_thread(
+            telephony.dispatch_outbound_call, phone, dossier.name, dossier.to_dict()
+        )
 
-        background_tasks.add_task(_dispatch)
+        if not result.get("ok"):
+            return JSONResponse({
+                "status": "error",
+                "message": "Outbound call was NOT placed: the carrier rejected it.",
+                "error": result.get("error"),
+                "phone": phone,
+                "candidate": dossier.name
+            }, status_code=502)
 
         return JSONResponse({
             "status": "success",
             "message": "Outbound call initiated with pre-fed context and pre-warmed audio.",
+            "provider": result.get("provider"),
+            "request_id": result.get("request_id"),
             "phone": phone,
             "candidate": dossier.name,
             "course": dossier.course_interest,
@@ -402,7 +433,7 @@ async def api_dispatch_call_with_prefeed(request: Request, background_tasks: Bac
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
-@app.get("/api/calls/prefeed/{phone}")
+@app.get("/api/calls/prefeed/{phone}", dependencies=[Depends(require_api_key)])
 async def api_get_precall_data(phone: str):
     """
     Retrieves current pre-call dossier and audio cache status for a phone number.
@@ -514,6 +545,23 @@ def process_recording(
 # TeleCMI Voice API & SIP Trunk Endpoints
 # ==========================================
 
+def _agent_connect_pcmo():
+    """PCMO that bridges the call to the PioPiy AI agent. Used as the last-resort response so
+    an unexpected error in the answer handler still connects the caller instead of hanging up."""
+    agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "")
+    raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "")))
+    caller_id = raw_caller if len(raw_caller) > 10 else f"91{raw_caller}"
+    return [{
+        "action": "connect",
+        "params": {"caller_id": caller_id},
+        "endpoints": [{"type": "agent", "id": agent_id}],
+    }]
+
+@app.head("/telecmi/answer", operation_id="telecmi_answer_head")
+async def telecmi_answer_head():
+    """Liveness probe some carriers send before dispatching the real webhook."""
+    return Response(status_code=200)
+
 @app.get("/telecmi/answer", operation_id="telecmi_answer_get")
 @app.post("/telecmi/answer", operation_id="telecmi_answer_post")
 async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
@@ -570,7 +618,9 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
         direction = data.get("direction", "inbound")
 
         import precall_manager
-        dossier = precall_manager.manager.get_dossier(caller_phone) if caller_phone != "guest" else None
+        import asyncio
+        # get_dossier can fall back to a blocking DB query; keep it off the event loop.
+        dossier = await asyncio.to_thread(precall_manager.manager.get_dossier, caller_phone) if caller_phone != "guest" else None
 
         if direction == "inbound":
             if dossier and dossier.name not in ["Candidate", "Future Pilot", "Inbound Caller", "TeleCMI Inbound Lead", "New Lead"]:
@@ -592,8 +642,8 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
                 background_tasks.add_task(supabase_client.save_conversation_history, caller_phone, [{"role": "assistant", "content": greeting_text}], direction)
 
         # 1. PioPiy AI Agent Mode (Ultra-low-latency WebRTC worker)
-        agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "") or "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
-        raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755")))
+        agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "")
+        raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "")))
         caller_id = raw_caller if len(raw_caller) > 10 else f"91{raw_caller}"
 
         if agent_id:
@@ -633,7 +683,7 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
         return pcmo_response
     except Exception as e:
         print(f"TeleCMI Answer Error: {e}")
-        return [{"action": "play", "file_name": precall_manager.INBOUND_DEFAULT_GREETING_URL}]
+        return _agent_connect_pcmo()
 
 @app.get("/telecmi/process-recording", operation_id="telecmi_process_recording_get")
 @app.post("/telecmi/process-recording", operation_id="telecmi_process_recording_post")
