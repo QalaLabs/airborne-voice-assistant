@@ -110,6 +110,13 @@ class PreCallManager:
         self._cache: Dict[str, PreCallDossier] = {}
         self._audio_cache_urls: Dict[str, str] = {}
 
+    MAX_CACHED_ENTRIES = 500
+
+    def _evict_oldest(self, mapping: dict):
+        """Caller must hold self._lock. Drops the oldest entries (insertion order) beyond the cap."""
+        while len(mapping) > self.MAX_CACHED_ENTRIES:
+            mapping.pop(next(iter(mapping)))
+
     def register_precall(
         self,
         phone: str,
@@ -153,6 +160,7 @@ class PreCallManager:
 
         with self._lock:
             self._cache[clean_key] = dossier
+            self._evict_oldest(self._cache)
 
         print(f"[PreCallManager] Dossier registered for {dossier.name} ({phone}) [Course: {dossier.course_interest}]")
 
@@ -183,6 +191,18 @@ class PreCallManager:
             self.trigger_audio_prewarm(dossier)
 
         return dossier
+
+    def find_phone_by_last_digits(self, digits: str) -> Optional[str]:
+        """
+        Returns the registered pre-call phone ending in `digits` if exactly one
+        matches, else None. Used only to resolve outbound calls whose carrier
+        context carries just a short token (e.g. the room name 'piopiyai_0151_...').
+        """
+        if not digits:
+            return None
+        with self._lock:
+            matches = [d.phone for key, d in self._cache.items() if key.endswith(digits)]
+        return matches[0] if len(matches) == 1 else None
 
     def get_dossier(self, phone: str) -> Optional[PreCallDossier]:
         """
@@ -217,6 +237,7 @@ class PreCallManager:
                 )
                 with self._lock:
                     self._cache[clean_key] = dossier
+                    self._evict_oldest(self._cache)
                 return dossier
         except Exception as e:
             print(f"PreCallManager: Fallback lookup error: {e}")
@@ -407,10 +428,14 @@ CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
             # 1. Pre-warm ElevenLabs PCM in RAM (if worker is running in same process or has global_eleven_tts)
             try:
                 import piopiy_agent_worker
-                if getattr(piopiy_agent_worker, "global_eleven_tts", None):
-                    asyncio.run(piopiy_agent_worker.global_eleven_tts.prewarm_greeting(greeting_text))
-            except Exception:
-                pass
+                tts = getattr(piopiy_agent_worker, "global_eleven_tts", None)
+                loop = getattr(piopiy_agent_worker, "main_loop", None)
+                # Run on the worker's own loop: the shared ElevenLabs HTTP client is bound to it,
+                # and a separate asyncio.run() here would swap that client out from under live calls.
+                if tts and loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(tts.prewarm_greeting(greeting_text), loop).result(timeout=30)
+            except Exception as e:
+                print(f"[PreCallManager] PCM pre-warm skipped: {e}")
 
             # 2. Pre-generate Cloud Storage / static audio URL
             try:
@@ -419,6 +444,7 @@ CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
                 url = assistant.get_greeting_voice_url(greeting_text)
                 with self._lock:
                     self._audio_cache_urls[clean_key] = url
+                    self._evict_oldest(self._audio_cache_urls)
                 print(f"[PreCallManager] Pre-warmed audio URL for {dossier.phone}: {url}")
             except Exception as e:
                 print(f"Pre-warm audio exception: {e}")

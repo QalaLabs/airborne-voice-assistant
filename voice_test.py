@@ -26,18 +26,24 @@ def listen(recording_url: str) -> str:
         if os.path.exists(recording_url):
             source_path = recording_url
         else:
+            import storage_service
+            from urllib.parse import urlparse
             fetch_url = recording_url
-            if (fetch_url.startswith("http://") or fetch_url.startswith("https://")) and "twilio" in fetch_url.lower():
-                if not fetch_url.endswith(".wav") and not fetch_url.endswith(".mp3"):
-                    fetch_url += ".wav"
+            if not storage_service.is_safe_recording_url(fetch_url):
+                print(f"STT: Refusing to download recording from disallowed URL: {fetch_url}")
+                return ""
+
+            is_twilio = storage_service._host_matches((urlparse(fetch_url).hostname or "").lower(), "twilio.com")
+            if is_twilio and not fetch_url.endswith(".wav") and not fetch_url.endswith(".mp3"):
+                fetch_url += ".wav"
 
             print(f"STT: Downloading recording from {fetch_url}...")
-            
-            auth = (config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN) if ("twilio" in fetch_url and config.TWILIO_ACCOUNT_SID) else None
+
+            auth = (config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN) if (is_twilio and config.TWILIO_ACCOUNT_SID) else None
             try:
-                response = requests.get(fetch_url, auth=auth, timeout=15)
+                response = requests.get(fetch_url, auth=auth, timeout=15, allow_redirects=False)
                 if response.status_code != 200:
-                    response = requests.get(fetch_url, timeout=15)
+                    response = requests.get(fetch_url, timeout=15, allow_redirects=False)
                     if response.status_code != 200:
                         print(f"STT: Failed to download audio. Status: {response.status_code}")
                         return ""

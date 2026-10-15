@@ -87,3 +87,7 @@ AGENT_ENGINE_ROLLOUT_PHONES = {
 # (main.py), called by the ADK agent's search_knowledge tool (agent/rag_client.py).
 INTERNAL_RAG_SHARED_SECRET = _clean_env("INTERNAL_RAG_SHARED_SECRET", "")
 
+# Shared secret required (X-API-Key header or Bearer token) by the call-dispatch,
+# pre-feed and new-lead endpoints in main.py. Unset => those endpoints refuse all requests.
+API_SHARED_SECRET = _clean_env("API_SHARED_SECRET", "")
+

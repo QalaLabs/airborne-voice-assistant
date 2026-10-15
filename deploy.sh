@@ -22,6 +22,8 @@ AGENT_ENGINE_RESOURCE_NAME=""
 # random string), used to authenticate the ADK agent's calls to this
 # service's new /internal/rag/query endpoint. Create it once with:
 #   echo -n "<random-secret>" | gcloud secrets create INTERNAL_RAG_SHARED_SECRET --data-file=- --project $PROJECT_ID
+# Also requires a secret named API_SHARED_SECRET (guards /api/calls/* and /webhooks/new-lead;
+# callers send it as the X-API-Key header). Create it the same way before deploying.
 
 echo "================================================="
 echo "Starting Cloud Run Deployment for $SERVICE_NAME"
@@ -43,11 +45,11 @@ gcloud run deploy $SERVICE_NAME \
     --memory 2Gi \
     --cpu 2 \
     --min-instances 1 \
-    --max-instances 10 \
+    --max-instances 1 \
     --no-cpu-throttling \
     --add-cloudsql-instances $CLOUD_SQL_INSTANCE \
     --set-env-vars "APP_URL=https://airborne-voice-assistant-368523757732.asia-south1.run.app,GCS_BUCKET_NAME=$BUCKET_NAME,GCP_PROJECT=$PROJECT_ID,GCP_LOCATION=$REGION,GEMINI_MODEL=gemini-3.1-flash-lite,OPENAI_MODEL=gpt-4o-mini,ELEVENLABS_MODEL_ID=eleven_flash_v2_5,ELEVENLABS_VOICE_ID=eJTrVjiaPKqBMpMujQdM,AGENT_ID=edc5b96c-9e10-4b1f-b2b0-528da3c30978,TELECMI_PIOPIY_APP_ID=edc5b96c-9e10-4b1f-b2b0-528da3c30978,TELECMI_PHONE_NUMBER=917943446755,CAMPUS_BOOKING_URL=https://calendly.com/airborne-aviation/campus-visit,USE_AGENT_ENGINE=false,AGENT_ENGINE_RESOURCE_NAME=$AGENT_ENGINE_RESOURCE_NAME" \
-    --set-secrets "DATABASE_URL=DATABASE_URL:latest,TELECMI_APP_ID=TELECMI_APP_ID:latest,TELECMI_APP_SECRET=TELECMI_APP_SECRET:2,TELECMI_TOKEN=TELECMI_TOKEN:latest,ELEVENLABS_API_KEY=ELEVENLABS_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,INTERNAL_RAG_SHARED_SECRET=INTERNAL_RAG_SHARED_SECRET:latest"
+    --set-secrets "DATABASE_URL=DATABASE_URL:latest,TELECMI_APP_ID=TELECMI_APP_ID:latest,TELECMI_APP_SECRET=TELECMI_APP_SECRET:2,TELECMI_TOKEN=TELECMI_TOKEN:latest,ELEVENLABS_API_KEY=ELEVENLABS_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,INTERNAL_RAG_SHARED_SECRET=INTERNAL_RAG_SHARED_SECRET:latest,API_SHARED_SECRET=API_SHARED_SECRET:latest"
 
 # 3. Retrieve live service URL
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --project $PROJECT_ID --platform managed --region $REGION --format 'value(status.url)')

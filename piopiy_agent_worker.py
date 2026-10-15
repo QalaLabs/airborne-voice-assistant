@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 
 # Force UTF-8 on Windows so rupee symbols or special characters never throw charmap encoding error
@@ -155,6 +156,9 @@ class FastStreamingElevenLabsTTS(TTSService):
                         chunks.append(chunk)
             if chunks:
                 self._cached_pcm[clean_text] = chunks
+                # Bound memory (~0.5 MB per greeting): evict the oldest entries beyond the cap.
+                while len(self._cached_pcm) > MAX_CACHED_GREETINGS:
+                    self._cached_pcm.pop(next(iter(self._cached_pcm)))
                 logger.info(f"⚡ Pre-cached greeting PCM ({len(chunks)} chunks) for 0ms pickup: '{clean_text[:40]}...'")
         except Exception as e:
             logger.warning(f"Could not pre-warm greeting PCM: {e}")
@@ -393,6 +397,42 @@ def init_audio_stack():
         except Exception as ve:
             logger.error(f"Error initializing SileroVADAnalyzer: {ve}")
 
+MAX_CACHED_GREETINGS = 40
+
+# Event loop that carries live calls; set by run_worker() so other threads can schedule work onto it.
+main_loop = None
+
+# Known development test leads, keyed by 10-digit Indian number.
+TEST_LEADS = {
+    "9811817062": dict(
+        name="Deepak",
+        course_interest="DGCA Commercial Pilot License program",
+        education="10+2 PCM",
+        call_objective="Explain CPL ground school batch & invite to Dwarka campus for A320 simulator demo.",
+    ),
+    "9910241143": dict(
+        name="Aayush",
+        course_interest="Airline Interview Prep & A320 Type Rating",
+        prior_aviation_exp="Holds CPL",
+        call_objective="Assess flying hours & invite for A320 fixed base simulator trial in Dwarka.",
+    ),
+    "6006760151": dict(
+        name="Aashirwad",
+        course_interest="Commercial Pilot License (CPL)",
+        prior_aviation_exp="None",
+        notes="Google Ads lead inquiring for CPL",
+        call_objective="Provide clear guidance on DGCA CPL requirements and Ground School batch (2.7L) at Dwarka, and invite to campus/A320 sim.",
+    ),
+}
+
+def build_test_lead_dossier(phone: str):
+    """Returns a dossier for a known test lead when `phone` equals its number exactly, else None."""
+    import precall_manager
+    fields = TEST_LEADS.get(precall_manager.normalize_phone_key(phone))
+    if not fields:
+        return None
+    return precall_manager.PreCallDossier(phone=phone, **fields)
+
 def resolve_call_context(kwargs: dict):
     """
     Determines call direction (inbound vs outbound) and extracts customer phone number.
@@ -430,20 +470,25 @@ def resolve_call_context(kwargs: dict):
 
     if is_outbound:
         direction = "outbound"
-        customer_digits = clean_to or clean_from
+        # Never fall back to clean_from here: on outbound that is the academy's own number.
+        customer_digits = clean_to
     else:
         direction = "inbound"
-        customer_digits = clean_from or clean_to
+        # Never fall back to clean_to here: on inbound that is the academy's own number.
+        customer_digits = clean_from
 
-    # Extract customer from room name / kwargs when carrier omits numbers
-    all_context_str = f"{kwargs} {room_raw} {caller_raw} {callee_raw}".lower()
-    if "7062" in all_context_str or "9811817062" in all_context_str or "deepak" in all_context_str:
-        customer_phone = "+919811817062"
-    elif "0151" in all_context_str or "6006760151" in all_context_str:
-        customer_phone = "+916006760151"
-    elif "1143" in all_context_str or "9910241143" in all_context_str or "aayush" in all_context_str:
-        customer_phone = "+919910241143"
-    elif len(customer_digits) == 10:
+    # Carrier omitted the numbers on an outbound call: the room name looks like
+    # 'piopiyai_<last4>_<id>'. Resolve it only against dossiers registered for this
+    # dispatch, and only when exactly one matches. Never for inbound calls.
+    if not customer_digits and direction == "outbound":
+        room_match = re.search(r"piopiyai_(\d{4})_", room_raw)
+        if room_match:
+            import precall_manager
+            registered = precall_manager.manager.find_phone_by_last_digits(room_match.group(1))
+            if registered:
+                customer_digits = "".join(filter(str.isdigit, registered))
+
+    if len(customer_digits) == 10:
         customer_phone = "+91" + customer_digits
     elif customer_digits.startswith("91") and len(customer_digits) == 12:
         customer_phone = "+" + customer_digits
@@ -489,7 +534,15 @@ async def create_session(
 
     # Check PreCallManager for pre-fed lead intelligence (zero mid-call RAG/DB latency)
     import precall_manager
-    dossier = precall_manager.manager.get_dossier(customer_phone)
+    # The cache hit is instant, but a miss falls back to a blocking DB query: run it off the
+    # event loop (which carries every live call) and never let it delay the greeting > 1.5 s.
+    try:
+        dossier = await asyncio.wait_for(
+            asyncio.to_thread(precall_manager.manager.get_dossier, customer_phone), timeout=1.5
+        )
+    except Exception as lookup_err:
+        logger.warning(f"Dossier lookup for {customer_phone} skipped ({lookup_err!r}); using default dossier.")
+        dossier = None
 
     # Check if Piopiy invite metadata contains lead variables
     meta = ctx_data.get("metadata")
@@ -501,34 +554,11 @@ async def create_session(
                 if v and hasattr(dossier, k):
                     setattr(dossier, k, v)
 
-    # Hardcoded test overrides for development checks
-    caller_str = f"{ctx_data}".lower()
+    # Development test leads: exact phone-number match only (never substring/name matching)
     if not dossier or dossier.name == "Candidate":
-        if "9811817062" in caller_str or "7062" in customer_phone or "deepak" in caller_str:
-            dossier = precall_manager.PreCallDossier(
-                phone=customer_phone,
-                name="Deepak",
-                course_interest="DGCA Commercial Pilot License program",
-                education="10+2 PCM",
-                call_objective="Explain CPL ground school batch & invite to Dwarka campus for A320 simulator demo."
-            )
-        elif "9910241143" in caller_str or "1143" in customer_phone or "aayush" in caller_str:
-            dossier = precall_manager.PreCallDossier(
-                phone=customer_phone,
-                name="Aayush",
-                course_interest="Airline Interview Prep & A320 Type Rating",
-                prior_aviation_exp="Holds CPL",
-                call_objective="Assess flying hours & invite for A320 fixed base simulator trial in Dwarka."
-            )
-        elif "6006760151" in caller_str or "0151" in customer_phone or "aashirwad" in caller_str:
-            dossier = precall_manager.PreCallDossier(
-                phone=customer_phone,
-                name="Aashirwad",
-                course_interest="Commercial Pilot License (CPL)",
-                prior_aviation_exp="None",
-                notes="Google Ads lead inquiring for CPL",
-                call_objective="Provide clear guidance on DGCA CPL requirements and Ground School batch (2.7L) at Dwarka, and invite to campus/A320 sim."
-            )
+        test_dossier = build_test_lead_dossier(customer_phone)
+        if test_dossier:
+            dossier = test_dossier
 
 
     if dossier:
@@ -660,8 +690,8 @@ async def create_session(
             import database
             import assistant
             logger.info(f"Persisting {len(call_history)} conversation turns for {customer_phone} ({direction})...")
-            database.save_conversation_history(customer_phone, call_history, direction)
-            
+            await asyncio.to_thread(database.save_conversation_history, customer_phone, call_history, direction)
+
             logger.info(f"Triggering post-call qualification pipeline for {customer_phone}...")
             asyncio.create_task(
                 asyncio.to_thread(assistant.run_post_call_pipeline, customer_phone, direction, "")
@@ -720,6 +750,8 @@ async def prewarm_services():
                 logger.warning(f"Could not pre-cache greeting: {ge}")
 
 async def run_worker():
+    global main_loop
+    main_loop = asyncio.get_running_loop()
     init_audio_stack()
     await prewarm_services()
     if not agent:
