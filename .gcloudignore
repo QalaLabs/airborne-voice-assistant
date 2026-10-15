@@ -1,0 +1,17 @@
+.gcloudignore
+.git
+.gitignore
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/
+.agents/
+.memory/
+.env
+.env.*
+!.env.example
+static/*.mp3
+response.mp3
