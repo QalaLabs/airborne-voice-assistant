@@ -548,8 +548,8 @@ def process_recording(
 def _agent_connect_pcmo():
     """PCMO that bridges the call to the PioPiy AI agent. Used as the last-resort response so
     an unexpected error in the answer handler still connects the caller instead of hanging up."""
-    agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "") or "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
-    raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755")))
+    agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "")
+    raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "")))
     caller_id = raw_caller if len(raw_caller) > 10 else f"91{raw_caller}"
     return [{
         "action": "connect",
@@ -642,8 +642,8 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
                 background_tasks.add_task(supabase_client.save_conversation_history, caller_phone, [{"role": "assistant", "content": greeting_text}], direction)
 
         # 1. PioPiy AI Agent Mode (Ultra-low-latency WebRTC worker)
-        agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "") or "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
-        raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755")))
+        agent_id = getattr(config, "AGENT_ID", "") or getattr(config, "TELECMI_PIOPIY_APP_ID", "")
+        raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "")))
         caller_id = raw_caller if len(raw_caller) > 10 else f"91{raw_caller}"
 
         if agent_id:

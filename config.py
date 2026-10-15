@@ -43,15 +43,17 @@ SUPABASE_KEY = _clean_env("SUPABASE_KEY", "")
 TELECRM_API_KEY = _clean_env("TELECRM_API_KEY", "")
 
 # Piopiy / TeleCMI Settings
-AGENT_ID = _clean_env("AGENT_ID", _clean_env("TELECMI_PIOPIY_APP_ID", "edc5b96c-9e10-4b1f-b2b0-528da3c30978"))
+AGENT_ID = _clean_env("AGENT_ID", _clean_env("TELECMI_PIOPIY_APP_ID", ""))
 AGENT_TOKEN = _clean_env("AGENT_TOKEN", _clean_env("TELECMI_TOKEN", ""))
 
 # TeleCMI / PIOPIY Voice API & Settings
-TELECMI_APP_ID = _clean_env("TELECMI_APP_ID", "edc5b96c-9e10-4b1f-b2b0-528da3c30978")
+TELECMI_APP_ID = _clean_env("TELECMI_APP_ID", "")
 TELECMI_APP_SECRET = _clean_env("TELECMI_APP_SECRET", "")
 TELECMI_TOKEN = _clean_env("TELECMI_TOKEN", "")
-TELECMI_PHONE_NUMBER = _clean_env("TELECMI_PHONE_NUMBER", "917943446755")
-TELECMI_PIOPIY_APP_ID = _clean_env("TELECMI_PIOPIY_APP_ID", "edc5b96c-9e10-4b1f-b2b0-528da3c30978")
+TELECMI_PHONE_NUMBER = _clean_env("TELECMI_PHONE_NUMBER", "")
+# Custom SIP namespace URL for this Piopiy project (SIP endpoints)
+PIOPIY_SIP_URL = _clean_env("PIOPIY_SIP_URL", "")
+TELECMI_PIOPIY_APP_ID = _clean_env("TELECMI_PIOPIY_APP_ID", "")
 # Shared secret appended as ?token=... on the TeleCMI Debug/Event webhook URL to verify
 # incoming requests actually originate from TeleCMI. Leave unset to disable verification.
 TELECMI_WEBHOOK_TOKEN = _clean_env("TELECMI_WEBHOOK_TOKEN", "")

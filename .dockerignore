@@ -12,3 +12,7 @@ tests
 *.mp3
 response.mp3
 .agents
+
+.env
+.env.*
+!.env.example

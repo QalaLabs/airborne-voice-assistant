@@ -91,7 +91,6 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
         getattr(config, "AGENT_ID", "")
         or config.TELECMI_PIOPIY_APP_ID
         or config.TELECMI_APP_ID
-        or "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
     )
     token = getattr(config, "AGENT_TOKEN", "") or config.TELECMI_TOKEN or ""
 
@@ -100,11 +99,11 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
         try:
             from piopiy.voice import RestClient
             client = RestClient(token=token)
-            raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755")))
+            raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "")))
             if len(raw_caller) == 10:
                 caller_id = "91" + raw_caller
             else:
-                caller_id = raw_caller or "917943446755"
+                caller_id = raw_caller
 
             # Dynamic personalized greeting audio for the lead
             greeting_text = precall_manager.manager.generate_greeting(dossier, direction="outbound")
@@ -197,10 +196,10 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
                 headers["token"] = config.TELECMI_TOKEN
             
             try:
-                from_num = int("".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "917943446755"))))
+                from_num = int("".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or ""))))
                 to_num = int("".join(filter(str.isdigit, str(telecmi_to))))
             except Exception:
-                from_num = config.TELECMI_PHONE_NUMBER or "917943446755"
+                from_num = config.TELECMI_PHONE_NUMBER or ""
                 to_num = telecmi_to
 
             payload = {
