@@ -18,8 +18,10 @@ Inbound calls to 917943446755 from a normal mobile phone never reach our AI agen
 
 **New finding (15 Oct 2026, ~11:16 IST):** an outbound call placed through your API for the same agent (caller_id 917943446755 → 916006760151) was rejected with the error **`kyc_not_verified`** (both `ai.call` and the `pcmo.call` fallback). Outbound calls from this account worked on 9, 10 and 12 Oct 2026, so the account KYC status appears to have changed, or the KYC for this number is not verified. This may also be why inbound calls are not delivered.
 
+**Update (15 Oct 2026, ~11:40 IST):** In the dashboard (Settings → KYC) both documents on the Qala Labs account show **"Verified"** (Incorporation Certificate and National ID, both dated 2026-08-20). Despite that, the API still returns `kyc_not_verified` for every outbound call — we regenerated the API token (token name "Airborne_Voice_Agent", org owner ab@qalalabs.com) and the error changed from `invalid_token` to `kyc_not_verified`, so the token is accepted but the API treats the account/number as not KYC-verified. Latest failing request: 15 Oct 2026, ~06:02 UTC, `ai.call` then `pcmo.call` fallback, caller_id 917943446755, to 916006760151, agent edc5b96c-9e10-4b1f-b2b0-528da3c30978.
+
 **What we need from you**
-0. **Please check the KYC status of the Qala Labs account and of number 917943446755, tell us exactly what is missing or expired, and verify/re-verify it.** We can upload any documents you need immediately.
+0. **The dashboard shows our KYC as Verified, but the API still returns `kyc_not_verified`. Please check which KYC check is failing (account-level, per-number for 917943446755, or per-app/agent) and fix it, or tell us exactly what is missing.** We can upload any documents you need immediately.
 1. Is 917943446755 a voice number that accepts **inbound calls from mobile/PSTN networks**? Or is it provisioned for outbound caller-ID only (it looks like an Ahmedabad 079 landline-style number)?
 2. If inbound is not enabled, please enable it and tell us if any plan, KYC or additional documents are needed.
 3. Please confirm the number is routed to the AI agent app *AirborneAviation* for inbound calls, and whether any other setting (for example inbound channel capacity for India) must be configured.
