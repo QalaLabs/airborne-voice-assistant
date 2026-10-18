@@ -139,20 +139,17 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
                 }
             ]
 
-            clean_variables = {
-                k: str(v) for k, v in (dossier.to_dict() if dossier else {}).items() 
-                if v and k not in ["created_at"]
-            }
-
+            # Note: Do not pass large/nested variables dictionary to Piopiy client.ai.call().
+            # Piopiy's PSTN switch parser stalls/drops outbound dials when extra variables are included.
+            # The worker retrieves the full pre-call dossier directly via PreCallManager by phone number on connect.
             print(f"Telephony: Dispatching Piopiy AI call (caller_id={caller_id}, to={telecmi_to}, agent_id={app_id})...")
             try:
                 res = client.ai.call(
                     caller_id=caller_id,
                     to_number=telecmi_to,
-                    agent_id=app_id,
-                    variables=clean_variables
+                    agent_id=app_id
                 )
-                print(f"Telephony: PioPiy AI call dispatched with pre-call variables: {res}")
+                print(f"Telephony: PioPiy AI call dispatched: {res}")
                 body_err = _response_error(res)
                 if body_err:
                     raise RuntimeError(body_err)
