@@ -56,7 +56,7 @@ except ImportError:
     VoiceAgent = None
     WhisperSTTService = None
     Model = None
-    GoogleLLMService = None
+    GoogleLLMService = object
     TTSService = object
     SileroVADAnalyzer = None
     VADParams = None

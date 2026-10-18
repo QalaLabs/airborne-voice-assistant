@@ -1,7 +1,10 @@
 from fastapi import FastAPI, Request, Form, Query, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from twilio.twiml.voice_response import VoiceResponse
+try:
+    from twilio.twiml.voice_response import VoiceResponse
+except ImportError:
+    VoiceResponse = None
 import uvicorn
 import os
 import hmac

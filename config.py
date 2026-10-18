@@ -45,6 +45,7 @@ TELECRM_API_KEY = _clean_env("TELECRM_API_KEY", "")
 # Piopiy / TeleCMI Settings
 AGENT_ID = _clean_env("AGENT_ID", _clean_env("TELECMI_PIOPIY_APP_ID", ""))
 AGENT_TOKEN = _clean_env("AGENT_TOKEN", _clean_env("TELECMI_TOKEN", ""))
+PIOPIY_TOKEN_NAME = _clean_env("PIOPIY_TOKEN_NAME", "Airborne_Voice_Agent")
 
 # TeleCMI / PIOPIY Voice API & Settings
 TELECMI_APP_ID = _clean_env("TELECMI_APP_ID", "")
