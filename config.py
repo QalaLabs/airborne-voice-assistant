@@ -59,6 +59,10 @@ TELECMI_PIOPIY_APP_ID = _clean_env("TELECMI_PIOPIY_APP_ID", "")
 # incoming requests actually originate from TeleCMI. Leave unset to disable verification.
 TELECMI_WEBHOOK_TOKEN = _clean_env("TELECMI_WEBHOOK_TOKEN", "")
 
+# Outbound Telephony Queue Recovery & PCMO Override
+CALL_VERIFICATION_TIMEOUT_SECS = float(_clean_env("CALL_VERIFICATION_TIMEOUT_SECS", "6.0"))
+FORCE_PCMO_OUTBOUND = _clean_env("FORCE_PCMO_OUTBOUND", "false").lower() in ("1", "true", "yes")
+
 
 # Booking & Automations Settings
 CAMPUS_BOOKING_URL = _clean_env("CAMPUS_BOOKING_URL", "https://calendly.com/airborne-aviation/campus-visit")
