@@ -204,6 +204,17 @@ class PreCallManager:
             matches = [d.phone for key, d in self._cache.items() if key.endswith(digits)]
         return matches[0] if len(matches) == 1 else None
 
+    def clear_dossier(self, phone: Optional[str] = None):
+        """Clears cached dossier (and pre-warmed audio) for a phone or all phones."""
+        with self._lock:
+            if phone:
+                clean_key = normalize_phone_key(phone)
+                self._cache.pop(clean_key, None)
+                self._audio_cache_urls.pop(clean_key, None)
+            else:
+                self._cache.clear()
+                self._audio_cache_urls.clear()
+
     def get_dossier(self, phone: str) -> Optional[PreCallDossier]:
         """
         Retrieves pre-call dossier in < 1ms from in-memory cache.

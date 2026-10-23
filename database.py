@@ -528,24 +528,56 @@ def record_call_outcome(
                 "custom_fields": custom_fields_payload
             }
 
+            # Check if an in-progress or initiated activity exists for this lead to update
             cur.execute("""
-                INSERT INTO lead_activities (
-                    id, "leadId", "orgId", "activityType", title, notes, outcome, "dueAt", "completedAt", "durationMins", metadata, "createdAt"
-                ) VALUES (
-                    gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
-                );
-            """, (
-                lead_id,
-                org_id,
-                activity_type,
-                activity_title,
-                activity_notes,
-                outcome,
-                next_follow_up,
-                now if outcome in ["CONNECTED", "COMPLETED", "EARLY_HANGUP"] else None,
-                duration_mins,
-                json.dumps(activity_metadata)
-            ))
+                SELECT id FROM lead_activities 
+                WHERE "leadId" = %s AND "activityType" = 'CALL' 
+                  AND outcome IN ('INITIATED', 'IN_PROGRESS', 'RINGING', 'DISPATCHED')
+                  AND "completedAt" IS NULL
+                ORDER BY "createdAt" DESC LIMIT 1;
+            """, (lead_id,))
+            pending_act = cur.fetchone()
+
+            if pending_act:
+                cur.execute("""
+                    UPDATE lead_activities SET
+                        title = %s,
+                        notes = %s,
+                        outcome = %s,
+                        "dueAt" = %s,
+                        "completedAt" = %s,
+                        "durationMins" = %s,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                    WHERE id = %s;
+                """, (
+                    activity_title,
+                    activity_notes,
+                    outcome,
+                    next_follow_up,
+                    now,
+                    duration_mins,
+                    json.dumps(activity_metadata),
+                    pending_act["id"]
+                ))
+            else:
+                cur.execute("""
+                    INSERT INTO lead_activities (
+                        id, "leadId", "orgId", "activityType", title, notes, outcome, "dueAt", "completedAt", "durationMins", metadata, "createdAt"
+                    ) VALUES (
+                        gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
+                    );
+                """, (
+                    lead_id,
+                    org_id,
+                    activity_type,
+                    activity_title,
+                    activity_notes,
+                    outcome,
+                    next_follow_up,
+                    now,
+                    duration_mins,
+                    json.dumps(activity_metadata)
+                ))
 
             # Also persist into voice_calls and calls table for backward-compatible call analytics
             for tbl in ["calls", "voice_calls"]:

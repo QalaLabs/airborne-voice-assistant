@@ -415,19 +415,22 @@ async def api_dispatch_call_with_prefeed(request: Request, background_tasks: Bac
         )
 
         if not result.get("ok"):
+            status_code = 429 if "concurrency limit" in str(result.get("error", "")).lower() else 502
             return JSONResponse({
                 "status": "error",
-                "message": "Outbound call was NOT placed: the carrier rejected it.",
+                "message": "Outbound call was NOT placed.",
                 "error": result.get("error"),
                 "phone": phone,
                 "candidate": dossier.name
-            }, status_code=502)
+            }, status_code=status_code)
 
         return JSONResponse({
             "status": "success",
-            "message": "Outbound call initiated with pre-fed context and pre-warmed audio.",
+            "message": "Outbound call initiated with pre-fed context and delivery verification active.",
             "provider": result.get("provider"),
             "request_id": result.get("request_id"),
+            "delivery_status": result.get("status", "QUEUED"),
+            "verification_active": result.get("verification_active", False),
             "phone": phone,
             "candidate": dossier.name,
             "course": dossier.course_interest,
@@ -435,6 +438,18 @@ async def api_dispatch_call_with_prefeed(request: Request, background_tasks: Bac
         })
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get("/api/calls/status/{identifier}", dependencies=[Depends(require_api_key)])
+async def api_get_call_delivery_status(identifier: str):
+    """
+    Queries real-time delivery status of an outbound call by phone or request_id.
+    Reports whether the call is QUEUED, RINGING, CONNECTED, or FALLBACK_DISPATCHED.
+    """
+    import telephony
+    st = telephony.get_dispatched_call_status(identifier)
+    if not st:
+        return JSONResponse({"status": "unknown", "message": "No active dispatch record found for this identifier."}, status_code=404)
+    return JSONResponse({"status": "found", "call": st})
 
 @app.get("/api/calls/prefeed/{phone}", dependencies=[Depends(require_api_key)])
 async def api_get_precall_data(phone: str):
@@ -827,6 +842,19 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
 
         if caller_phone and not caller_phone.startswith("+"):
             caller_phone = "+" + caller_phone
+
+        # Update call delivery tracker and release watcher if progressing
+        if caller_phone:
+            if status in ["ringing", "ring", "in-progress", "early", "progress"]:
+                telephony.mark_call_progress(caller_phone, status="RINGING")
+            elif status in ["answered", "answer", "connected", "bridge"]:
+                telephony.mark_call_progress(caller_phone, status="CONNECTED")
+            elif status in ["completed", "hangup", "end", "terminated"]:
+                telephony.mark_call_progress(caller_phone, status="COMPLETED")
+            elif status in ["missed", "no-answer", "no_answer", "busy", "rejected", "failed", "cancelled", "unavailable"]:
+                telephony.mark_call_progress(caller_phone, status=status.upper())
+            else:
+                telephony.mark_call_progress(caller_phone, status=status.upper())
 
         # 1. Unanswered, Busy, or Rejected calls -> Schedule 2-hour CRM follow-up in Cloud SQL
         if status in ["missed", "no-answer", "no_answer", "busy", "rejected", "failed", "cancelled", "unavailable"] and caller_phone:

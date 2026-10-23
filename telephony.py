@@ -1,7 +1,217 @@
+import os
 import requests
+import threading
+import time
 import config
 import database
 import supabase_client
+
+MAX_CONCURRENT_CALLS = 2
+_active_calls_lock = threading.Lock()
+_active_calls = {}
+
+CALL_VERIFICATION_TIMEOUT_SECS = float(os.getenv("CALL_VERIFICATION_TIMEOUT_SECS", "6.0"))
+FORCE_PCMO_OUTBOUND = os.getenv("FORCE_PCMO_OUTBOUND", "false").lower() in ("1", "true", "yes")
+
+_dispatched_calls_lock = threading.Lock()
+_dispatched_calls = {}
+_phone_to_req = {}
+_active_watchers = {}
+
+def get_dispatched_call_status(identifier: str) -> dict:
+    """Returns current delivery status for request_id or phone."""
+    with _dispatched_calls_lock:
+        digits = "".join(filter(str.isdigit, identifier))
+        if identifier in _dispatched_calls:
+            return dict(_dispatched_calls[identifier])
+        if digits in _phone_to_req:
+            req_id = _phone_to_req[digits]
+            return dict(_dispatched_calls.get(req_id, {}))
+        return {}
+
+def cancel_all_watchers():
+    """Cancels all active delivery verification timers (useful in tests and shutdown)."""
+    with _dispatched_calls_lock:
+        for timer in list(_active_watchers.values()):
+            try:
+                if timer and timer.is_alive():
+                    timer.cancel()
+            except Exception:
+                pass
+        _active_watchers.clear()
+
+def mark_call_progress(identifier: str, status: str, call_id: str = None):
+    """
+    Updates delivery status of an outbound call (e.g. RINGING, CONNECTED, ANSWERED, COMPLETED).
+    Satisfies or cancels the delivery verification watcher so stalled queue alerts or fallbacks
+    do not misfire once a call is actively ringing or connected.
+    """
+    with _dispatched_calls_lock:
+        digits = "".join(filter(str.isdigit, identifier))
+        req_id = identifier if identifier in _dispatched_calls else _phone_to_req.get(digits)
+        if req_id and req_id in _dispatched_calls:
+            entry = _dispatched_calls[req_id]
+            old_status = entry.get("status")
+            entry["status"] = status.upper()
+            if call_id:
+                entry["call_id"] = call_id
+            entry["updated_at"] = time.time()
+            print(f"Telephony: Call progress updated for {entry.get('phone')} (req={req_id}): {old_status} -> {status.upper()}")
+
+            # If moving to active or terminal status, cancel any pending watcher
+            if status.upper() in ("RINGING", "CONNECTED", "ANSWERED", "IN_PROGRESS", "COMPLETED", "HANGUP", "FAILED", "BUSY", "NO_ANSWER", "REJECTED"):
+                timer = _active_watchers.pop(req_id, None)
+                if timer and timer.is_alive():
+                    timer.cancel()
+
+    # If terminal status, ensure active call slot is released
+    if status.upper() in ("COMPLETED", "HANGUP", "FAILED", "REJECTED", "BUSY", "NO_ANSWER", "DND"):
+        release_active_call(identifier)
+
+def _execute_pcmo_fallback(parent_request_id: str, formatted_phone: str, lead_name: str, precall_data: dict):
+    """
+    Emergency recovery dial: bypasses the stalled AI agent message broker queue and dials
+    the PSTN handset directly via client.pcmo.call with an agent connect pipeline.
+    """
+    try:
+        app_id = (
+            getattr(config, "AGENT_ID", "")
+            or config.TELECMI_PIOPIY_APP_ID
+            or config.TELECMI_APP_ID
+        )
+        token = getattr(config, "AGENT_TOKEN", "") or config.TELECMI_TOKEN or ""
+        if not (token and app_id):
+            print("Telephony: Fallback failed: missing token or app_id.")
+            return
+
+        from piopiy.voice import RestClient
+        client = RestClient(token=token)
+        raw_caller = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER or "")))
+        caller_id = "91" + raw_caller if len(raw_caller) == 10 else raw_caller
+        clean_digits = "".join(filter(str.isdigit, formatted_phone))
+        telecmi_to = clean_digits if not clean_digits.startswith("+") else clean_digits[1:]
+        if len(telecmi_to) == 10:
+            telecmi_to = "91" + telecmi_to
+
+        pipeline = [
+            {
+                "action": "connect",
+                "params": {
+                    "caller_id": caller_id
+                },
+                "endpoints": [
+                    {
+                        "type": "agent",
+                        "id": app_id
+                    }
+                ]
+            }
+        ]
+
+        print(f"Telephony: [AUTO-RECOVERY] Dispatching direct PCMO call to {telecmi_to} (caller_id={caller_id}, agent={app_id})...")
+        res = client.pcmo.call(
+            caller_id=caller_id,
+            to_number=telecmi_to,
+            app_id=app_id,
+            pipeline=pipeline
+        )
+        print(f"Telephony: PioPiy PCMO fallback call dispatched: {res}")
+        body_err = _response_error(res)
+        if body_err:
+            raise RuntimeError(body_err)
+
+        fallback_req = res.get("request") if isinstance(res, dict) and res.get("request") else f"fallback-{int(time.time())}"
+        with _dispatched_calls_lock:
+            if parent_request_id in _dispatched_calls:
+                _dispatched_calls[parent_request_id]["status"] = "FALLBACK_PCMO_DISPATCHED"
+                _dispatched_calls[parent_request_id]["fallback_request_id"] = fallback_req
+            _dispatched_calls[fallback_req] = {
+                "phone": formatted_phone,
+                "status": "QUEUED",
+                "dispatched_at": time.time(),
+                "provider": "piopiy_pcmo_fallback",
+                "parent_request_id": parent_request_id
+            }
+            digits = "".join(filter(str.isdigit, formatted_phone))
+            _phone_to_req[digits] = fallback_req
+
+        # Secondary 8-second check on fallback
+        def _secondary_check():
+            with _dispatched_calls_lock:
+                entry = _dispatched_calls.get(fallback_req)
+                status = entry.get("status") if entry else None
+            if status == "QUEUED":
+                print(f"Telephony: [ALERT] Secondary PCMO fallback to {formatted_phone} also stalled in queue. Marking STALLED_CARRIER_OR_DND.")
+                mark_call_progress(formatted_phone, "STALLED_CARRIER_OR_DND")
+                release_active_call(formatted_phone)
+
+        sec_timer = threading.Timer(8.0, _secondary_check)
+        sec_timer.daemon = True
+        sec_timer.start()
+
+    except Exception as e:
+        print(f"Telephony Error: Automatic PCMO fallback failed: {e}")
+        mark_call_progress(formatted_phone, "FALLBACK_FAILED")
+        release_active_call(formatted_phone)
+
+def _schedule_delivery_verification(request_id: str, formatted_phone: str, lead_name: str, precall_data: dict, timeout_secs: float = CALL_VERIFICATION_TIMEOUT_SECS):
+    """
+    Starts an asynchronous background verification timer.
+    If the carrier message broker returned 'call_queued' but no ringing, bridge,
+    or session connected event arrives within timeout_secs, triggers automatic PCMO fallback.
+    """
+    if not request_id:
+        return
+
+    def _watcher_callback():
+        with _dispatched_calls_lock:
+            entry = _dispatched_calls.get(request_id)
+            if not entry:
+                return
+            current_status = entry.get("status")
+
+        if current_status == "QUEUED":
+            print(f"Telephony: [ALERT] Call to {formatted_phone} (req={request_id}) STALLED in 'call_queued' for {timeout_secs}s without PSTN ringing.")
+            print(f"Telephony: [AUTO-RECOVERY] Triggering automatic PCMO dial fallback for {formatted_phone}...")
+            _execute_pcmo_fallback(request_id, formatted_phone, lead_name, precall_data)
+
+    timer = threading.Timer(timeout_secs, _watcher_callback)
+    timer.daemon = True
+    with _dispatched_calls_lock:
+        _active_watchers[request_id] = timer
+    timer.start()
+
+def get_active_calls_count() -> int:
+    """Returns number of active concurrent calls, pruning expired leases (>15 mins)."""
+    with _active_calls_lock:
+        now = time.time()
+        expired = [p for p, t in _active_calls.items() if now - t > 900]
+        for p in expired:
+            _active_calls.pop(p, None)
+        return len(_active_calls)
+
+def register_active_call(phone: str) -> bool:
+    """
+    Attempts to acquire a call slot under the MAX_CONCURRENT_CALLS (2) limit.
+    Returns True if registered, False if concurrency limit is reached.
+    """
+    with _active_calls_lock:
+        now = time.time()
+        expired = [p for p, t in _active_calls.items() if now - t > 900]
+        for p in expired:
+            _active_calls.pop(p, None)
+        if len(_active_calls) >= MAX_CONCURRENT_CALLS:
+            return False
+        _active_calls[phone] = now
+        return True
+
+def release_active_call(phone: str):
+    """Releases an active call slot when the call concludes or fails."""
+    with _active_calls_lock:
+        digits = "".join(filter(str.isdigit, phone))
+        to_remove = [k for k in _active_calls if k == phone or "".join(filter(str.isdigit, k)) == digits]
+        for k in to_remove:
+            _active_calls.pop(k, None)
 
 try:
     from twilio.rest import Client
@@ -54,7 +264,13 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
         formatted_phone = "+" + clean_digits if not phone_number.startswith("+") else phone_number
         telecmi_to = clean_digits
             
-    print(f"Telephony: Initiating outbound call to {lead_name or 'Candidate'} at {formatted_phone}...")
+    # Enforce concurrency ceiling: maximum 2 calls simultaneously
+    if not register_active_call(formatted_phone):
+        err = f"Agent concurrency limit reached ({MAX_CONCURRENT_CALLS} concurrent calls). Call rejected."
+        print(f"Telephony: {err}")
+        return {"ok": False, "provider": None, "error": err, "request_id": None}
+
+    print(f"Telephony: Initiating outbound call to {lead_name or 'Candidate'} at {formatted_phone} (active calls: {get_active_calls_count()}/{MAX_CONCURRENT_CALLS})...")
     
     # 0. Register & pre-warm pre-call context
     import precall_manager
@@ -124,7 +340,23 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
 
             base_url = (getattr(config, "APP_URL", "") or getattr(config, "NGROK_URL", "") or "https://airborne-voice-assistant-368523757732.asia-south1.run.app").rstrip("/")
             action_url = f"{base_url}/telecmi/process-recording?phone={telecmi_to}&direction=outbound"
-            pipeline = [
+            
+            # Agent connect pipeline bridges answered PSTN leg straight to LiveKit agent
+            agent_connect_pipeline = [
+                {
+                    "action": "connect",
+                    "params": {
+                        "caller_id": caller_id
+                    },
+                    "endpoints": [
+                        {
+                            "type": "agent",
+                            "id": app_id
+                        }
+                    ]
+                }
+            ]
+            ivr_fallback_pipeline = [
                 {
                     "action": "play_get_input",
                     "prompt": {
@@ -138,6 +370,7 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
                     }
                 }
             ]
+            active_pipeline = agent_connect_pipeline if app_id else ivr_fallback_pipeline
 
             # Format lightweight variables and call options as specified in Piopiy v3 REST docs
             first_name = (lead_name or (dossier.name if dossier else "Candidate")).strip().split()[0]
@@ -154,6 +387,34 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
                 "ticket_id": ticket_id
             }
 
+            # Optional bypass: If FORCE_PCMO_OUTBOUND is enabled, skip the AI agent queue
+            # and dial the PSTN leg directly via PCMO with an immediate agent bridge
+            if FORCE_PCMO_OUTBOUND:
+                print(f"Telephony: FORCE_PCMO_OUTBOUND is active. Dispatching direct PCMO call to {telecmi_to}...")
+                res = client.pcmo.call(
+                    caller_id=caller_id,
+                    to_number=telecmi_to,
+                    app_id=app_id,
+                    pipeline=active_pipeline
+                )
+                print(f"Telephony: PioPiy direct PCMO call dispatched: {res}")
+                body_err = _response_error(res)
+                if body_err:
+                    raise RuntimeError(body_err)
+                req_id = res.get("request") if isinstance(res, dict) and res.get("request") else f"req-{int(time.time())}"
+                with _dispatched_calls_lock:
+                    _dispatched_calls[req_id] = {
+                        "phone": formatted_phone,
+                        "status": "QUEUED",
+                        "dispatched_at": time.time(),
+                        "provider": "piopiy_pcmo",
+                        "lead_name": lead_name,
+                        "precall_data": precall_data
+                    }
+                    _phone_to_req[clean_digits] = req_id
+                return {"ok": True, "provider": "piopiy_pcmo", "error": None,
+                        "request_id": req_id, "status": "QUEUED", "verification_active": False}
+
             print(f"Telephony: Dispatching Piopiy AI call (caller_id={caller_id}, to={telecmi_to}, agent_id={app_id}, vars={call_variables})...")
             try:
                 res = client.ai.call(
@@ -167,8 +428,30 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
                 body_err = _response_error(res)
                 if body_err:
                     raise RuntimeError(body_err)
+
+                req_id = res.get("request") if isinstance(res, dict) and res.get("request") else f"req-{int(time.time())}"
+                with _dispatched_calls_lock:
+                    _dispatched_calls[req_id] = {
+                        "phone": formatted_phone,
+                        "status": "QUEUED",
+                        "dispatched_at": time.time(),
+                        "provider": "piopiy_ai",
+                        "lead_name": lead_name,
+                        "precall_data": precall_data
+                    }
+                    _phone_to_req[clean_digits] = req_id
+
+                # Arm 6-second delivery verification watcher to rescue queued calls if PSTN leg stalls
+                _schedule_delivery_verification(
+                    request_id=req_id,
+                    formatted_phone=formatted_phone,
+                    lead_name=lead_name,
+                    precall_data=precall_data,
+                    timeout_secs=CALL_VERIFICATION_TIMEOUT_SECS
+                )
+
                 return {"ok": True, "provider": "piopiy_ai", "error": None,
-                        "request_id": res.get("request") if isinstance(res, dict) else None}
+                        "request_id": req_id, "status": "QUEUED", "verification_active": True}
             except Exception as ai_err:
                 print(f"Telephony: AI call failed ({ai_err}), attempting client.pcmo.call fallback...")
                 try:
@@ -176,14 +459,25 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
                         caller_id=caller_id,
                         to_number=telecmi_to,
                         app_id=app_id,
-                        pipeline=pipeline
+                        pipeline=active_pipeline
                     )
                     print(f"Telephony: PioPiy PCMO call dispatched: {res}")
                     body_err = _response_error(res)
                     if body_err:
                         raise RuntimeError(body_err)
+                    req_id = res.get("request") if isinstance(res, dict) and res.get("request") else f"req-{int(time.time())}"
+                    with _dispatched_calls_lock:
+                        _dispatched_calls[req_id] = {
+                            "phone": formatted_phone,
+                            "status": "QUEUED",
+                            "dispatched_at": time.time(),
+                            "provider": "piopiy_pcmo",
+                            "lead_name": lead_name,
+                            "precall_data": precall_data
+                        }
+                        _phone_to_req[clean_digits] = req_id
                     return {"ok": True, "provider": "piopiy_pcmo", "error": None,
-                            "request_id": res.get("request") if isinstance(res, dict) else None}
+                            "request_id": req_id, "status": "QUEUED", "verification_active": False}
                 except Exception as pcmo_err:
                     print(f"Telephony: PCMO dispatch also failed: {pcmo_err}")
                     raise
@@ -264,6 +558,7 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
     # Every configured carrier was tried and none accepted the call: report the failure
     # instead of falling through to simulation mode.
     if carrier_configured:
+        release_active_call(formatted_phone)
         error = errors[0] if errors else "no carrier accepted the call"
         print(f"Telephony: Outbound call to {formatted_phone} FAILED: {error}")
         return {"ok": False, "provider": None, "error": error, "request_id": None}
