@@ -28,3 +28,16 @@ When modifying, developing, or running voice agents and telephony workers:
 6. **Low-Latency & Weaker Network Audio Guardrails**:
    - **Barge-in Grace Window**: In low-bandwidth cellular environments, always enforce an initial 1.0–1.5s grace period before activating microphone interruption detection (`allow_interruptions`). Cellular ring-trip clicks and carrier audio spikes will otherwise falsely trigger VAD and cancel greeting playback before the caller hears the agent.
    - **Container Deployment Synchronization**: Cloud Run containers must be re-deployed immediately following any pre-call logic or routing updates to prevent divergence between git HEAD and live container revisions.
+
+7. **GCP Secret Manager String Invariants (Avoid PowerShell Byte-Array Mangling)**:
+   - When updating secrets via `gcloud secrets versions add`, never pass string bytes via PowerShell pipeline (`[System.Text.Encoding]::UTF8.GetBytes($token) | gcloud ...`). PowerShell serializes this as newline-separated integer ASCII codes (`101\n121\n...`), corrupting JWT tokens.
+   - Always write secrets to a temporary clean file without trailing newlines and upload using `--data-file="<temp-file>"`, then delete the file.
+
+8. **TRAI Indian Telecommunication Window & DND Deferral**:
+   - Outbound automated commercial calls originating from Indian virtual SIP headers (e.g. `917943446755`) are legally restricted under TRAI TCCCPR regulations between **09:00 PM and 09:00 AM IST**.
+   - Outbound dispatches during this window are acknowledged as `call_queued` by the carrier switch but held until 09:00 AM IST.
+   - Inbound calls placed to the virtual number (`+917943446755`) are consumer-initiated and connect 24/7.
+
+9. **Outbound Rate Limiting & Zero-Collision Dialing**:
+   - Never dispatch multiple test calls in rapid succession to the same recipient. Telephony switches queue requests and dial simultaneously, causing active room collisions on the user's handset.
+   - Always enforce a minimum 60-second cooldown per target phone number between outbound API dispatches.

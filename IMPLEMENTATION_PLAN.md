@@ -1,6 +1,6 @@
 # Implementation Plan: Reliable Inbound + Outbound Calls (and security hardening)
 
-Scope: `airborne-voice-assistant` on Cloud Run (`asia-south1`), TeleCMI/PioPiy DID `917943446755`, agent `edc5b96c-…`.
+Scope: `airborne-voice-assistant` on Cloud Run (`asia-south1`), TeleCMI/PioPiy DID `917948568600`, agent `edc5b96c-…`.
 
 ## 0. What the code already tells us (corrects the earlier report)
 

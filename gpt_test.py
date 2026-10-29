@@ -84,6 +84,7 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
             response = _gemini_session.post(url, json=payload, headers=headers, timeout=10)
             if response.status_code in [500, 503, 429]:
                 print(f"Gemini {candidate_model} returned {response.status_code}. Trying next model...")
+                last_err = RuntimeError(f"Gemini {candidate_model} returned HTTP {response.status_code}")
                 continue
             response.raise_for_status()
             res_data = response.json()
@@ -96,6 +97,7 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
 
     if last_err:
         raise last_err
+    raise RuntimeError("All Gemini candidate models failed to generate content")
 
 def chat_with_vertex_ai(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
     """
@@ -136,7 +138,9 @@ def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", js
     # 1. Primary: Use Gemini Studio if API Key is configured
     if config.GEMINI_API_KEY:
         try:
-            return chat_with_gemini(prompt, history, system_prompt, json_mode=json_mode)
+            res = chat_with_gemini(prompt, history, system_prompt, json_mode=json_mode)
+            if res:
+                return res
         except Exception as e:
             print(f"Gemini Studio failed ({e}). Trying Vertex AI...")
 

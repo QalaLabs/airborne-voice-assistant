@@ -93,10 +93,15 @@ class TestAirborneAssistantFlow(unittest.TestCase):
         _, should_hang_up_1 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
         self.assertFalse(should_hang_up_1)
         
-        # Turn 2: Consecutive Silence -> Circuit breaker must hang up
+        # Turn 2: Silence
         mock_listen.return_value = ""
         _, should_hang_up_2 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
-        self.assertTrue(should_hang_up_2)
+        self.assertFalse(should_hang_up_2)
+
+        # Turn 3: Consecutive Silence -> Circuit breaker must hang up
+        mock_listen.return_value = ""
+        _, should_hang_up_3 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
+        self.assertTrue(should_hang_up_3)
 
     def test_exit_regex_cleanup(self):
         """
@@ -135,10 +140,10 @@ class TestAirborneAssistantFlow(unittest.TestCase):
         """
         import piopiy_agent_worker
         
-        # Test Case 1: Inbound call to academy number (917943446755)
+        # Test Case 1: Inbound call to academy number (917948568600)
         inbound_kwargs = {
             "from_number": "9811817062",
-            "to_number": "917943446755"
+            "to_number": "917948568600"
         }
         direction, phone = piopiy_agent_worker.resolve_call_context(inbound_kwargs)
         self.assertEqual(direction, "inbound")
@@ -146,7 +151,7 @@ class TestAirborneAssistantFlow(unittest.TestCase):
 
         # Test Case 2: Outbound call from academy to customer
         outbound_kwargs = {
-            "from_number": "917943446755",
+            "from_number": "917948568600",
             "to_number": "9876543210"
         }
         direction_out, phone_out = piopiy_agent_worker.resolve_call_context(outbound_kwargs)

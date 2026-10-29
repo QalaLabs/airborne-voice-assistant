@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $ServiceName = "airborne-voice-assistant"
 $ProjectId = "airborne-aviation-505100"
 $Region = "asia-south1"
+$GcpAccount = "adminairborne@gmail.com"
 $CloudSqlInstance = "airborne-aviation-505100:asia-south1:airborne-db"
 $BucketName = "airborne-aviation-media-prod"
 
@@ -31,13 +32,14 @@ Write-Host "=================================================" -ForegroundColor 
 
 # 1. Enable required GCP Services
 Write-Host "📌 Step 1: Ensuring GCP APIs are enabled..." -ForegroundColor Yellow
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com storage.googleapis.com sqladmin.googleapis.com --project $ProjectId
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com storage.googleapis.com sqladmin.googleapis.com --project $ProjectId --account $GcpAccount
 
 # 2. Build and Deploy to Cloud Run directly from source
 Write-Host "📌 Step 2: Building container and deploying to Cloud Run ($Region)..." -ForegroundColor Yellow
 gcloud run deploy $ServiceName `
     --source . `
     --project $ProjectId `
+    --account $GcpAccount `
     --region $Region `
     --platform managed `
     --allow-unauthenticated `
@@ -47,11 +49,11 @@ gcloud run deploy $ServiceName `
     --max-instances 1 `
     --no-cpu-throttling `
     --add-cloudsql-instances $CloudSqlInstance `
-    --set-env-vars "APP_URL=https://airborne-voice-assistant-368523757732.asia-south1.run.app,GCS_BUCKET_NAME=$BucketName,GCP_PROJECT=$ProjectId,GCP_LOCATION=$Region,GEMINI_MODEL=gemini-3.1-flash-lite,OPENAI_MODEL=gpt-4o-mini,USE_ELEVENLABS=true,ELEVENLABS_AGENT_ID=agent_5701kztar977fxsb7nj7cxedcrgf,ELEVENLABS_MODEL_ID=eleven_flash_v2_5,ELEVENLABS_VOICE_ID=eJTrVjiaPKqBMpMujQdM,AGENT_ID=edc5b96c-9e10-4b1f-b2b0-528da3c30978,TELECMI_PIOPIY_APP_ID=edc5b96c-9e10-4b1f-b2b0-528da3c30978,TELECMI_PHONE_NUMBER=917943446755,CAMPUS_BOOKING_URL=https://calendly.com/airborne-aviation/campus-visit,USE_AGENT_ENGINE=false,AGENT_ENGINE_RESOURCE_NAME=$AgentEngineResourceName" `
+    --set-env-vars "APP_URL=https://airborne-voice-assistant-368523757732.asia-south1.run.app,GCS_BUCKET_NAME=$BucketName,GCP_PROJECT=$ProjectId,GCP_LOCATION=$Region,GEMINI_MODEL=gemini-3.1-flash-lite,OPENAI_MODEL=gpt-4o-mini,USE_ELEVENLABS=true,ELEVENLABS_AGENT_ID=agent_5701kztar977fxsb7nj7cxedcrgf,ELEVENLABS_MODEL_ID=eleven_flash_v2_5,ELEVENLABS_VOICE_ID=eJTrVjiaPKqBMpMujQdM,AGENT_ID=edc5b96c-9e10-4b1f-b2b0-528da3c30978,TELECMI_PIOPIY_APP_ID=edc5b96c-9e10-4b1f-b2b0-528da3c30978,TELECMI_PHONE_NUMBER=917948568600,PIOPIY_SIP_URL=qalalabs_airborne.piopiy.io,PIOPIY_TOKEN_NAME=AAA_V2,CAMPUS_BOOKING_URL=https://calendly.com/airborne-aviation/campus-visit,USE_AGENT_ENGINE=false,AGENT_ENGINE_RESOURCE_NAME=$AgentEngineResourceName,CALL_VERIFICATION_TIMEOUT_SECS=6.0,FORCE_PCMO_OUTBOUND=false" `
     --set-secrets "DATABASE_URL=DATABASE_URL:latest,TELECMI_APP_ID=TELECMI_APP_ID:latest,TELECMI_APP_SECRET=TELECMI_APP_SECRET:2,TELECMI_TOKEN=TELECMI_TOKEN:latest,AGENT_TOKEN=TELECMI_TOKEN:latest,ELEVENLABS_API_KEY=ELEVENLABS_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,INTERNAL_RAG_SHARED_SECRET=INTERNAL_RAG_SHARED_SECRET:latest,API_SHARED_SECRET=API_SHARED_SECRET:latest"
 
 # 3. Retrieve live service URL
-$ServiceUrl = (gcloud run services describe $ServiceName --project $ProjectId --platform managed --region $Region --format 'value(status.url)').Trim()
+$ServiceUrl = (gcloud run services describe $ServiceName --project $ProjectId --account $GcpAccount --platform managed --region $Region --format 'value(status.url)').Trim()
 
 Write-Host ""
 Write-Host "=================================================" -ForegroundColor Green

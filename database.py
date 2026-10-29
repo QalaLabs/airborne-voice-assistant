@@ -574,7 +574,7 @@ def record_call_outcome(
                 "custom_fields": custom_fields_payload
             }
 
-            # Check if there is an existing in-progress / initiated activity to complete rather than duplicating
+            # Check if an in-progress or initiated activity exists for this lead to update
             existing_act_id = None
             if lead_id:
                 try:
@@ -583,7 +583,7 @@ def record_call_outcome(
                         WHERE "leadId" = %s
                           AND "activityType" = 'CALL'
                           AND "completedAt" IS NULL
-                          AND outcome IN ('INITIATED', 'IN_PROGRESS', 'QUEUED')
+                          AND outcome IN ('INITIATED', 'IN_PROGRESS', 'QUEUED', 'RINGING', 'DISPATCHED')
                         ORDER BY "createdAt" DESC
                         LIMIT 1;
                     """, (lead_id,))

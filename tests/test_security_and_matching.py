@@ -77,7 +77,7 @@ class TestLeadMatchingTests(unittest.TestCase):
         direction, phone = piopiy_agent_worker.resolve_call_context(
             {
                 "from_number": "9876540151",
-                "to_number": "917943446755",
+                "to_number": "917948568600",
                 "room_name": "piopiyai_7062_abc",
                 "metadata": {"note": "deepak aayush"},
             }
@@ -87,7 +87,7 @@ class TestLeadMatchingTests(unittest.TestCase):
 
     def test_inbound_never_uses_room_name_token(self):
         direction, phone = piopiy_agent_worker.resolve_call_context(
-            {"to_number": "917943446755", "room_name": "piopiyai_0151_xyz"}
+            {"to_number": "917948568600", "room_name": "piopiyai_0151_xyz"}
         )
         self.assertEqual(direction, "inbound")
         self.assertEqual(phone, "+910000000000")
@@ -95,7 +95,7 @@ class TestLeadMatchingTests(unittest.TestCase):
     def test_outbound_room_token_resolves_only_unique_registered_dossier(self):
         mgr = precall_manager.manager
         mgr.register_precall(phone="+916006760151", name="Aashirwad", prewarm_audio=False)
-        ctx = {"from_number": "917943446755", "room_name": "piopiyai_0151_XKPp"}
+        ctx = {"from_number": "917948568600", "room_name": "piopiyai_0151_XKPp"}
         direction, phone = piopiy_agent_worker.resolve_call_context(ctx)
         self.assertEqual(direction, "outbound")
         self.assertEqual(phone, "+916006760151")

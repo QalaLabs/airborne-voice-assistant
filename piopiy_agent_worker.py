@@ -574,6 +574,12 @@ async def create_session(
     direction, customer_phone = resolve_call_context(ctx_data)
     logger.info(f"Call session connected! call_id={call_id}, direction={direction}, phone={customer_phone}, room={room_name}")
 
+    try:
+        import telephony
+        telephony.mark_call_progress(customer_phone, status="CONNECTED", call_id=call_id)
+    except Exception as ce:
+        logger.warning(f"Could not mark telephony call progress: {ce}")
+
     # Check PreCallManager for pre-fed lead intelligence (zero mid-call RAG/DB latency)
     import precall_manager
     # The cache hit is instant, but a miss falls back to a blocking DB query: run it off the
@@ -691,6 +697,11 @@ async def create_session(
     logger.info("VoiceAgent pipeline active. Tuned 500ms turn latency & real-time interruption pause armed!")
     await voice_agent.start()
     logger.info(f"Call session finished for call_id={call_id}")
+    try:
+        import telephony
+        telephony.mark_call_progress(customer_phone, status="COMPLETED", call_id=call_id)
+    except Exception:
+        pass
 
     # Post-call processing & CRM synchronization
     try:
@@ -741,6 +752,13 @@ async def create_session(
             )
     except Exception as pe:
         logger.error(f"Error persisting call history / post-call pipeline: {pe}")
+    finally:
+        try:
+            import telephony
+            telephony.release_active_call(customer_phone)
+            logger.info(f"Released active call concurrency slot for {customer_phone}.")
+        except Exception as re:
+            logger.warning(f"Notice releasing concurrency slot: {re}")
 
 agent = None
 if Agent and AGENT_ID and AGENT_TOKEN:
