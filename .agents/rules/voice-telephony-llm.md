@@ -1,6 +1,6 @@
 ---
 description: Best practices and invariants for real-time voice telephony agents and Gemini LLM integration
-globs: ["*.py", "**/*.py"]
+globs: "*.py, **/*.py"
 ---
 
 # Real-Time Voice Telephony & LLM Guidelines

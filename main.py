@@ -22,20 +22,24 @@ async def lifespan(app: FastAPI):
     and runs the PioPiy AI Agent Worker for real-time signaling.
     """
     import asyncio
-    database.init_db()
-    scheduler.init_scheduler()
+    is_testing = os.environ.get("TESTING", "").lower() in ("true", "1") or os.environ.get("PYTEST_CURRENT_TEST") is not None
+
+    if not is_testing:
+        database.init_db()
+        scheduler.init_scheduler()
 
     # Launch Piopiy AI agent worker for real-time call signaling
     worker_task = None
-    try:
-        import piopiy_agent_worker
-        if getattr(piopiy_agent_worker, "agent", None):
-            worker_task = asyncio.create_task(piopiy_agent_worker.run_worker())
-            print("🚀 Piopiy AI Agent Worker background task launched.")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Notice starting piopiy_agent_worker: {e}")
+    if not is_testing:
+        try:
+            import piopiy_agent_worker
+            if getattr(piopiy_agent_worker, "agent", None):
+                worker_task = asyncio.create_task(piopiy_agent_worker.run_worker())
+                print("🚀 Piopiy AI Agent Worker background task launched.", flush=True)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Notice starting piopiy_agent_worker: {e}", flush=True)
 
     yield
 
@@ -46,7 +50,8 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-app = FastAPI(title="Airborne Aviation AI Voice Assistant", lifespan=lifespan)
+is_testing_mode = os.environ.get("TESTING", "").lower() in ("true", "1") or os.environ.get("PYTEST_CURRENT_TEST") is not None
+app = FastAPI(title="Airborne Aviation AI Voice Assistant", lifespan=None if is_testing_mode else lifespan)
 
 # Ensure static directory exists
 os.makedirs("static", exist_ok=True)
@@ -817,13 +822,39 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
         print(f"[TeleCMI Debug / Event Log]: {data}")
 
         status = (data.get("status") or data.get("event") or "").lower()
-        caller_phone = str(data.get("from") or data.get("phone") or data.get("to") or "")
-        direction = data.get("direction", "inbound")
+        direction = (data.get("direction") or "inbound").lower()
+        
+        # In outbound calls, 'from' is TeleCMI's DID (e.g. 917948568600), and 'to' is the student lead.
+        # In inbound calls, 'from' is the student caller, and 'to' is the academy.
+        if direction == "outbound":
+            caller_phone = str(data.get("to") or data.get("phone") or data.get("from") or "")
+        else:
+            caller_phone = str(data.get("from") or data.get("phone") or data.get("to") or "")
+
+        provider_call_id = str(data.get("call_id") or data.get("request_id") or data.get("uuid") or data.get("call_uuid") or "")
         recording_url = data.get("record_url") or data.get("recording_url") or data.get("file_url") or ""
         duration = int(data.get("duration") or data.get("billsec") or 0)
 
         if caller_phone and not caller_phone.startswith("+"):
             caller_phone = "+" + caller_phone
+
+        # Forward telephony event to Admin App for real-time UI/timeline update and queue draining
+        admin_api_url = os.environ.get("ADMIN_API_URL", "https://airborne-admin-368523757732.asia-south1.run.app")
+        shared_secret = config.API_SHARED_SECRET
+        if admin_api_url and shared_secret:
+            async def forward_to_admin(payload: dict):
+                import httpx
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        await client.post(
+                            f"{admin_api_url.rstrip('/')}/api/v1/telephony/events",
+                            json=payload,
+                            headers={"X-API-Key": shared_secret, "Content-Type": "application/json"}
+                        )
+                except Exception as fe:
+                    print(f"Notice: Failed to forward telephony event to Admin: {fe}")
+
+            background_tasks.add_task(forward_to_admin, data)
 
         # 1. Unanswered, Busy, or Rejected calls -> Schedule 2-hour CRM follow-up in Cloud SQL
         if status in ["missed", "no-answer", "no_answer", "busy", "rejected", "failed", "cancelled", "unavailable"] and caller_phone:
@@ -834,7 +865,8 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
                 outcome=outcome,
                 direction=direction,
                 duration=duration,
-                recording_url=""
+                recording_url="",
+                provider_call_id=provider_call_id
             )
         # 2. Early hangup (answered, but disconnected under 8 seconds) -> Schedule 4-hour CRM follow-up
         elif status in ["completed", "hangup", "end", "terminated"] and 0 < duration <= 8 and caller_phone:
@@ -844,14 +876,26 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
                 outcome="EARLY_HANGUP",
                 direction=direction,
                 duration=duration,
-                recording_url=recording_url
+                recording_url=recording_url,
+                provider_call_id=provider_call_id
             )
         # 3. Conversed call completed -> Execute full AI qualification, GCS archiving, and CRM sync
         elif status in ["completed", "hangup", "end", "terminated"] and caller_phone:
             hist = supabase_client.get_conversation_history(caller_phone)
             # Only trigger if session has dialogue history to process
             if hist and len(hist) > 1:
-                background_tasks.add_task(run_post_call_pipeline, caller_phone, direction, recording_url)
+                background_tasks.add_task(run_post_call_pipeline, caller_phone, direction, recording_url, provider_call_id)
+            else:
+                # Still record standard completed outcome if session had no dialog turns
+                background_tasks.add_task(
+                    database.record_call_outcome,
+                    phone=caller_phone,
+                    outcome="COMPLETED",
+                    direction=direction,
+                    duration=duration,
+                    recording_url=recording_url,
+                    provider_call_id=provider_call_id
+                )
 
         return {"status": "success", "event_received": True, "event_type": status or "logged"}
     except Exception as e:

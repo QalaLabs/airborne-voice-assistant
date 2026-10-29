@@ -56,7 +56,7 @@ except ImportError:
     VoiceAgent = None
     WhisperSTTService = None
     Model = None
-    GoogleLLMService = None
+    GoogleLLMService = object
     TTSService = object
     SileroVADAnalyzer = None
     VADParams = None
@@ -252,7 +252,7 @@ class FastStreamingElevenLabsTTS(TTSService):
 
 ElevenLabsTTSService = FastStreamingElevenLabsTTS
 
-class ResilientGoogleLLMService(GoogleLLMService):
+class ResilientGoogleLLMService(GoogleLLMService if GoogleLLMService is not None else object):
     """
     Guarantees strict alternating turn structure for Google Gemini API.
     Prevents 'Requests ending with a model turn are not supported' (400 Bad Request)
@@ -482,7 +482,7 @@ def resolve_call_context(kwargs: dict):
     room_raw = str(kwargs.get("room_name") or "")
     metadata = kwargs.get("metadata") or {}
 
-    academy_numbers = []
+    academy_numbers = ["917948568600", "7948568600", "917943446755", "7943446755"]
     if getattr(config, "TELECMI_PHONE_NUMBER", None):
         clean_tele = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER)))
         if clean_tele:

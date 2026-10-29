@@ -269,7 +269,7 @@ def clear_session(phone: str):
 _active_pipelines = set()
 _pipelines_lock = threading.Lock()
 
-def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
+def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provider_call_id: str = None):
     """
     Asynchronous post-call processor.
     1. Archives call recording to Google Cloud Storage.
@@ -427,7 +427,8 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str):
             city=data.get("city_or_location"),
             custom_fields=custom_fields,
             user_query=data.get("user_query"),
-            booking_intent=data.get("booking_intent")
+            booking_intent=data.get("booking_intent"),
+            provider_call_id=provider_call_id
         )
         
         # 2. Synchronize with external TeleCRM if configured

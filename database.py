@@ -20,12 +20,18 @@ _pool = None
 
 def get_pool():
     global _pool
+    if os.environ.get("TESTING", "").lower() in ("true", "1") or os.environ.get("PYTEST_CURRENT_TEST") is not None:
+        return None
     if _pool is None and DATABASE_URL and ThreadedConnectionPool:
         try:
+            dsn = DATABASE_URL
+            if "connect_timeout" not in dsn:
+                separator = "&" if "?" in dsn else "?"
+                dsn = f"{dsn}{separator}connect_timeout=3"
             _pool = ThreadedConnectionPool(
                 minconn=1,
                 maxconn=10,
-                dsn=DATABASE_URL,
+                dsn=dsn,
                 cursor_factory=RealDictCursor
             )
         except Exception as e:
@@ -64,6 +70,8 @@ def get_connection():
     """
     Creates and returns a PostgreSQL connection from the connection pool (with direct fallback).
     """
+    if os.environ.get("TESTING", "").lower() in ("true", "1") or os.environ.get("PYTEST_CURRENT_TEST") is not None:
+        return None
     if not DATABASE_URL or not psycopg2:
         return None
 
@@ -77,7 +85,11 @@ def get_connection():
             print(f"Database Pool Checkout Error: {e}")
 
     try:
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        dsn = DATABASE_URL
+        if "connect_timeout" not in dsn:
+            separator = "&" if "?" in dsn else "?"
+            dsn = f"{dsn}{separator}connect_timeout=3"
+        conn = psycopg2.connect(dsn, cursor_factory=RealDictCursor)
         conn.autocommit = True
         return conn
     except Exception as e:
@@ -121,6 +133,16 @@ def init_db():
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "nextFollowUp" TIMESTAMP WITH TIME ZONE;
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "latestCallStatus" VARCHAR(50);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "latestCallOutcome" VARCHAR(50);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "lastCallAt" TIMESTAMP WITH TIME ZONE;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "lastCallDuration" INTEGER;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "callAttemptCount" INTEGER DEFAULT 0;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "nextCallAt" TIMESTAMP WITH TIME ZONE;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "doNotCall" BOOLEAN DEFAULT false;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "lastCallSummary" TEXT;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "telecmiConversationId" VARCHAR(255);
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "autoCallingEnabled" BOOLEAN DEFAULT true;
                     ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'ACTIVE';
                     DO $$ BEGIN ALTER TYPE "LeadSource" ADD VALUE IF NOT EXISTS 'VOICE_AGENT'; EXCEPTION WHEN undefined_object THEN NULL; END $$;
                 """
@@ -367,7 +389,8 @@ def record_call_outcome(
     city: str = None,
     custom_fields: dict = None,
     user_query: str = None,
-    booking_intent: str = None
+    booking_intent: str = None,
+    provider_call_id: str = None
 ):
     """
     Core CRM synchronization function.
@@ -511,11 +534,33 @@ def record_call_outcome(
                     update_fields.append('"courseInterest" = %s')
                     params.append(course_interest)
 
+                # Update call tracking fields on lead
+                call_stat = "COMPLETED" if outcome in ["CONNECTED", "COMPLETED"] else ("FAILED" if outcome in ["FAILED", "NO_ANSWER", "BUSY", "MISSED", "REJECTED"] else outcome)
+                update_fields.append('"latestCallStatus" = %s')
+                params.append(call_stat)
+                update_fields.append('"latestCallOutcome" = %s')
+                params.append(outcome)
+                update_fields.append('"lastCallAt" = CURRENT_TIMESTAMP')
+                if duration > 0:
+                    update_fields.append('"lastCallDuration" = %s')
+                    params.append(duration)
+                if summary:
+                    update_fields.append('"lastCallSummary" = %s')
+                    params.append(summary)
+                if provider_call_id:
+                    update_fields.append('"telecmiConversationId" = %s')
+                    params.append(provider_call_id)
+                if direction == "outbound":
+                    update_fields.append('"callAttemptCount" = COALESCE("callAttemptCount", 0) + 1')
+                if next_follow_up is not None:
+                    update_fields.append('"nextCallAt" = %s')
+                    params.append(next_follow_up)
+
                 params.append(lead_id)
                 query = f'UPDATE leads SET {", ".join(update_fields)} WHERE id = %s;'
                 cur.execute(query, tuple(params))
 
-            # Log into CRM lead_activities table
+            # Log / update into CRM lead_activities table
             duration_mins = max(1, duration // 60) if duration > 0 else 0
             activity_metadata = {
                 "outcome": outcome,
@@ -525,27 +570,89 @@ def record_call_outcome(
                 "transcript": transcript or "",
                 "classification": classification or "",
                 "booking_intent": booking_intent or "",
+                "provider_call_id": provider_call_id or "",
                 "custom_fields": custom_fields_payload
             }
 
-            cur.execute("""
-                INSERT INTO lead_activities (
-                    id, "leadId", "orgId", "activityType", title, notes, outcome, "dueAt", "completedAt", "durationMins", metadata, "createdAt"
-                ) VALUES (
-                    gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
-                );
-            """, (
-                lead_id,
-                org_id,
-                activity_type,
-                activity_title,
-                activity_notes,
-                outcome,
-                next_follow_up,
-                now if outcome in ["CONNECTED", "COMPLETED", "EARLY_HANGUP"] else None,
-                duration_mins,
-                json.dumps(activity_metadata)
-            ))
+            # Check if there is an existing in-progress / initiated activity to complete rather than duplicating
+            existing_act_id = None
+            if lead_id:
+                try:
+                    cur.execute("""
+                        SELECT id FROM lead_activities
+                        WHERE "leadId" = %s
+                          AND "activityType" = 'CALL'
+                          AND "completedAt" IS NULL
+                          AND outcome IN ('INITIATED', 'IN_PROGRESS', 'QUEUED')
+                        ORDER BY "createdAt" DESC
+                        LIMIT 1;
+                    """, (lead_id,))
+                    act_row = cur.fetchone()
+                    if act_row:
+                        existing_act_id = act_row["id"]
+                except Exception as act_check_err:
+                    print(f"DB Notice (lead_activities check): {act_check_err}")
+
+            if existing_act_id:
+                cur.execute("""
+                    UPDATE lead_activities SET
+                        outcome = %s,
+                        title = %s,
+                        notes = %s,
+                        "dueAt" = %s,
+                        "completedAt" = %s,
+                        "durationMins" = %s,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                    WHERE id = %s;
+                """, (
+                    outcome,
+                    activity_title,
+                    activity_notes,
+                    next_follow_up,
+                    now if outcome in ["CONNECTED", "COMPLETED", "EARLY_HANGUP"] else None,
+                    duration_mins,
+                    json.dumps(activity_metadata),
+                    existing_act_id
+                ))
+            else:
+                cur.execute("""
+                    INSERT INTO lead_activities (
+                        id, "leadId", "orgId", "activityType", title, notes, outcome, "dueAt", "completedAt", "durationMins", metadata, "createdAt"
+                    ) VALUES (
+                        gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
+                    );
+                """, (
+                    lead_id,
+                    org_id,
+                    activity_type,
+                    activity_title,
+                    activity_notes,
+                    outcome,
+                    next_follow_up,
+                    now if outcome in ["CONNECTED", "COMPLETED", "EARLY_HANGUP"] else None,
+                    duration_mins,
+                    json.dumps(activity_metadata)
+                ))
+
+            # Update calling_jobs table if it exists
+            if lead_id or provider_call_id:
+                try:
+                    final_job_status = "COMPLETED" if outcome in ["CONNECTED", "COMPLETED"] else "FAILED"
+                    cur.execute("""
+                        UPDATE calling_jobs SET
+                            status = %s::"CallingJobStatus",
+                            "completedAt" = CURRENT_TIMESTAMP,
+                            "callCompletedAt" = CURRENT_TIMESTAMP,
+                            "durationSecs" = %s,
+                            "recordingUrl" = COALESCE(%s, "recordingUrl"),
+                            transcript = COALESCE(%s, transcript),
+                            summary = COALESCE(%s, summary),
+                            "updatedAt" = CURRENT_TIMESTAMP
+                        WHERE ("providerCallId" = %s AND %s IS NOT NULL)
+                           OR ("leadId" = %s AND status IN ('PROCESSING', 'INITIATED', 'RINGING', 'ANSWERED'));
+                    """, (final_job_status, duration, recording_url, transcript, summary, provider_call_id, provider_call_id, lead_id))
+                except Exception as cj_err:
+                    print(f"DB Notice (calling_jobs update): {cj_err}")
 
             # Also persist into voice_calls and calls table for backward-compatible call analytics
             for tbl in ["calls", "voice_calls"]:

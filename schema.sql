@@ -124,3 +124,75 @@ BEGIN
   LIMIT match_count;
 END;
 $$;
+
+
+-- Enum for CallingJob status
+DO $$ BEGIN
+    CREATE TYPE "CallingJobStatus" AS ENUM (
+        'QUEUED',
+        'PROCESSING',
+        'INITIATED',
+        'RINGING',
+        'ANSWERED',
+        'COMPLETED',
+        'FAILED',
+        'RETRY_SCHEDULED',
+        'SKIPPED',
+        'CANCELLED'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- Table for durable background calling queue and call outcome tracking
+CREATE TABLE IF NOT EXISTS calling_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "orgId" UUID NOT NULL,
+    "leadId" UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    provider VARCHAR(50) NOT NULL DEFAULT 'telecmi',
+    status "CallingJobStatus" NOT NULL DEFAULT 'QUEUED',
+    phone VARCHAR(50) NOT NULL,
+    "leadName" VARCHAR(255),
+    "courseInterest" VARCHAR(255),
+    "scheduledAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "attemptCount" INTEGER NOT NULL DEFAULT 0,
+    "maxAttempts" INTEGER NOT NULL DEFAULT 3,
+    "nextAttemptAt" TIMESTAMP WITH TIME ZONE,
+    "lockedAt" TIMESTAMP WITH TIME ZONE,
+    "lockedBy" VARCHAR(100),
+    "lastErrorCode" VARCHAR(100),
+    "lastErrorMessage" TEXT,
+    "providerCallId" VARCHAR(100),
+    "idempotencyKey" VARCHAR(255) NOT NULL,
+    "skipReason" VARCHAR(100),
+
+    -- Timing metrics
+    "leadCreatedAt" TIMESTAMP WITH TIME ZONE,
+    "jobCreatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "jobStartedAt" TIMESTAMP WITH TIME ZONE,
+    "providerRequestAt" TIMESTAMP WITH TIME ZONE,
+    "providerAcceptedAt" TIMESTAMP WITH TIME ZONE,
+    "callStartedAt" TIMESTAMP WITH TIME ZONE,
+    "callAnsweredAt" TIMESTAMP WITH TIME ZONE,
+    "callCompletedAt" TIMESTAMP WITH TIME ZONE,
+    "initiationLatencyMs" INTEGER,
+
+    -- Call outcome
+    "durationSecs" INTEGER,
+    "callOutcome" VARCHAR(50),
+    "recordingUrl" TEXT,
+    "transcript" TEXT,
+    "summary" TEXT,
+    "requiresHumanFollowup" BOOLEAN NOT NULL DEFAULT false,
+    "callbackRequestedAt" TIMESTAMP WITH TIME ZONE,
+
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS calling_jobs_org_idempotency_idx ON calling_jobs("orgId", "idempotencyKey");
+CREATE INDEX IF NOT EXISTS calling_jobs_queue_drain_idx ON calling_jobs("orgId", status, "scheduledAt");
+CREATE INDEX IF NOT EXISTS calling_jobs_lead_idx ON calling_jobs("leadId");
+CREATE INDEX IF NOT EXISTS calling_jobs_provider_call_id_idx ON calling_jobs("providerCallId");
+CREATE INDEX IF NOT EXISTS calling_jobs_retry_idx ON calling_jobs(status, "nextAttemptAt");

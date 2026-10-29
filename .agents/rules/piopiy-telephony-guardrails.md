@@ -1,6 +1,6 @@
 ---
 description: Critical guardrails for Piopiy AI Telephony workers, LiveKit WebRTC, and voice pipeline services
-globs: ["**/piopiy_agent_worker.py", "**/telephony.py", "**/main.py", "**/*voice*"]
+globs: "**/piopiy_agent_worker.py, **/telephony.py, **/main.py, **/*voice*"
 ---
 
 # Piopiy AI Telephony Guardrails
