@@ -492,7 +492,7 @@ def resolve_call_context(kwargs: dict):
     room_raw = str(kwargs.get("room_name") or "")
     metadata = kwargs.get("metadata") or {}
 
-    academy_numbers = ["917948568600", "7948568600", "917943446755", "7943446755"]
+    academy_numbers = ["917948568600", "7948568600"]
     if getattr(config, "TELECMI_PHONE_NUMBER", None):
         clean_tele = "".join(filter(str.isdigit, str(config.TELECMI_PHONE_NUMBER)))
         if clean_tele:

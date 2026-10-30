@@ -413,13 +413,15 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
             "notes": data.get("notes")
         }
 
+        final_recording_url = gcs_recording_url or recording_url or ""
+
         # 1. Update CRM (leads table & lead_activities) directly in Cloud SQL
         supabase_client.record_call_outcome(
             phone=phone,
             outcome=outcome,
             direction=direction,
             duration=duration_estimate,
-            recording_url=gcs_recording_url,
+            recording_url=final_recording_url,
             transcript=transcript,
             summary=summary,
             callback_time=data.get("callback_time") or data.get("scheduled_time"),
@@ -433,6 +435,37 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
             booking_intent=data.get("booking_intent"),
             provider_call_id=provider_call_id
         )
+
+        # 1b. Direct webhook notification to Admin App to ensure immediate timeline & recording availability
+        admin_api_url = os.environ.get("ADMIN_API_URL", "https://airborne-admin-368523757732.asia-south1.run.app")
+        shared_secret = getattr(config, "API_SHARED_SECRET", "")
+        if admin_api_url and shared_secret:
+            try:
+                import requests
+                admin_payload = {
+                    "phone": phone,
+                    "callerPhone": phone,
+                    "direction": direction,
+                    "status": "COMPLETED",
+                    "duration": duration_estimate,
+                    "recordingUrl": final_recording_url,
+                    "recording_url": final_recording_url,
+                    "gcs_recording_url": gcs_recording_url,
+                    "transcript": transcript,
+                    "summary": summary,
+                    "classification": data.get("classification"),
+                    "bookingIntent": data.get("booking_intent"),
+                    "courseInterest": data.get("course_interest"),
+                    "providerCallId": provider_call_id,
+                }
+                requests.post(
+                    f"{admin_api_url.rstrip('/')}/api/v1/telephony/events",
+                    json=admin_payload,
+                    headers={"X-API-Key": shared_secret, "Content-Type": "application/json"},
+                    timeout=5
+                )
+            except Exception as admin_err:
+                print(f"Notice: Could not forward post-call completion to admin: {admin_err}")
         
         # 2. Synchronize with external TeleCRM if configured
         lead_payload = {
@@ -440,7 +473,7 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
             "phone": phone,
             "course_interest": data["course_interest"],
             "classification": data["classification"],
-            "recording_url": gcs_recording_url
+            "recording_url": final_recording_url
         }
         crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
 

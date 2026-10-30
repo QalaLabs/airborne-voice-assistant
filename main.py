@@ -882,10 +882,22 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
         admin_api_url = os.environ.get("ADMIN_API_URL", "https://airborne-admin-368523757732.asia-south1.run.app")
         shared_secret = config.API_SHARED_SECRET
         if admin_api_url and shared_secret:
+            admin_event_payload = {
+                **data,
+                "phone": caller_phone,
+                "callerPhone": caller_phone,
+                "providerCallId": provider_call_id,
+                "recordingUrl": recording_url,
+                "recording_url": recording_url,
+                "record_url": recording_url,
+                "duration": duration,
+                "direction": direction,
+                "status": status,
+            }
             async def forward_to_admin(payload: dict):
                 import httpx
                 try:
-                    async with httpx.AsyncClient(timeout=5.0) as client:
+                    async with httpx.AsyncClient(timeout=8.0) as client:
                         await client.post(
                             f"{admin_api_url.rstrip('/')}/api/v1/telephony/events",
                             json=payload,
@@ -894,7 +906,7 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
                 except Exception as fe:
                     print(f"Notice: Failed to forward telephony event to Admin: {fe}")
 
-            background_tasks.add_task(forward_to_admin, data)
+            background_tasks.add_task(forward_to_admin, admin_event_payload)
 
         # 1. Unanswered, Busy, or Rejected calls -> Schedule 2-hour CRM follow-up in Cloud SQL
         if status in ["missed", "no-answer", "no_answer", "busy", "rejected", "failed", "cancelled", "unavailable"] and caller_phone:

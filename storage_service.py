@@ -71,7 +71,7 @@ def upload_audio_file(local_path: str, destination_blob_name: str, content_type:
 
 # Hosts (and their subdomains) recordings may be downloaded from. Extend via the
 # RECORDING_HOST_ALLOWLIST env var (comma-separated) if the carrier uses another domain.
-_DEFAULT_RECORDING_HOSTS = ("telecmi.com", "piopiy.com", "twilio.com", "storage.googleapis.com")
+_DEFAULT_RECORDING_HOSTS = ("telecmi.com", "piopiy.com", "piopiy.io", "twilio.com", "storage.googleapis.com")
 
 def _recording_hosts():
     extra = [h.strip().lower() for h in os.environ.get("RECORDING_HOST_ALLOWLIST", "").split(",") if h.strip()]
