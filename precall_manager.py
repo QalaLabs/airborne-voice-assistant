@@ -259,19 +259,19 @@ class PreCallManager:
         """
         Constructs a crisp, natural opening greeting reflecting known lead facts.
         """
-        name = dossier.name if dossier.name and dossier.name not in ["Candidate", "New Lead", "Future Pilot"] else None
+        name = dossier.name if dossier.name and dossier.name not in ["Candidate", "New Lead", "Future Pilot", "Inbound Caller", "Guest"] else None
         course = (dossier.course_interest or "Commercial Pilot License").strip()
 
         if direction == "inbound":
             if name:
-                return f"Hello {name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
-            return "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+                return f"Hello {name}! Thank you for calling Airborne Aviation Academy, Dwarka. Piyush, the admission counsellor here. How may I help you today?"
+            return "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Piyush, the admission counsellor. May I know your good name, and which course or query are you calling about today?"
 
         # Outbound call
         if "cabin" in course.lower():
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
+                return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
+            return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
         
         is_holding_cpl = False
         if dossier.prior_aviation_exp:
@@ -282,18 +282,18 @@ class PreCallManager:
 
         if is_holding_cpl or "type rating" in course.lower() or "a320" in course.lower():
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
+                return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
+            return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
 
         if "interview" in course.lower() or "airline prep" in course.lower():
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
+                return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
+            return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
 
         # Standard Pilot Training / CPL inquiry
         if name:
-            return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {course}. How can I guide your pilot training journey today?"
-        return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training. How can I guide your aviation journey today?"
+            return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {course}. How can I guide your pilot training journey today?"
+        return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training. How can I guide your aviation journey today?"
 
     def compile_system_prompt(self, dossier: Optional[PreCallDossier], direction: str = "outbound") -> str:
         """
@@ -301,14 +301,16 @@ class PreCallManager:
         the system instructions so the LLM requires ZERO mid-call RAG lookups.
         """
         base_prompt = """
-You are Captain Navrang, Chief Pilot Instructor & Head of Training at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
-You are on a live call. Your primary mission is to be an ADVISOR, MENTOR, and INFORMATIVE GUIDE for aspiring pilots and aviation students.
+You are Piyush, the admission counsellor at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+Captain Navrang Singh is our Chief Pilot Instructor & Head of Training who leads the DGCA ground classes and simulator training.
+You are on a live call. Your primary mission is to be an ADVISOR, HELPFUL COUNSELOR, and INFORMATIVE GUIDE for aspiring pilots, students, and parents.
 
 CORE CONVERSATIONAL PRINCIPLES:
-1. Guidance First (Not Pushy):
-   - Focus on answering the caller's specific questions thoroughly and accurately.
-   - Do not rush or force booking a campus visit or call. Provide clear value and information first! Only invite them to visit or test the simulator when relevant or after helping them.
-   - Active Listening & Pausing: If the candidate begins talking, asking questions, or interrupting, pause immediately and listen with complete focus. Never speak over the caller.
+1. Answer the Specific Question First (No Rigid Script Recitation):
+   - Always address the caller's exact question or topic immediately and directly.
+   - If the caller asks about eGCA, DGCA medicals, 10+2 NIOS subjects, or YouTube videos, explain that specific topic clearly. DO NOT pivot to unrequested sales topics.
+   - STRICT PRICING RULE: NEVER volunteer course fees (e.g. Rs. 2,70,000 or Rs. 55-65 Lakhs) unless the caller explicitly asks about fees, cost, tuition, or budget.
+   - Active Listening & Pausing: If the candidate begins talking, asking questions, or says 'wait' / 'pause', pause immediately and listen with complete focus. Never speak over the caller.
 2. Two-Sentence Delivery: Keep responses to 1 or 2 crisp, clear sentences (under 30 words total).
    - Sentence 1: Give a direct, expert answer or clear clarification.
    - Sentence 2: Provide essential context or ask a gentle, helpful question (e.g., "Does that help?", "Would you like more details on the subjects?").
@@ -417,7 +419,7 @@ CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
                 "  1. Greet them warmly regarding their inquiry for airline interview preparation.\n"
                 "  2. Clarify gently whether they are aspiring to become an airline pilot or looking at cabin crew.\n"
                 "  3. If pilot: Explain kindly that to sit for airline pilot interviews and selections, a candidate must first clear DGCA exams and obtain a CPL (Commercial Pilot License).\n"
-                "  4. Guide them that the essential starting point is DGCA CPL Ground Training (covering all 5 DGCA papers + RTR aero) at Airborne Aviation Academy, Dwarka under Capt. Navrang (Fee: Rs. 2,70,000), followed by 200 flying hours.\n"
+                "  4. Guide them that the essential starting point is DGCA CPL Ground Training (covering all 5 DGCA papers + RTR aero) at Airborne Aviation Academy, Dwarka under Chief Instructor Capt. Navrang Singh, followed by 200 flying hours. Only quote fees if they ask about pricing.\n"
                 "  5. Mention that our Dwarka campus has an onsite Airbus A320 simulator so students get early airline cockpit familiarity from day one.\n"
                 "  6. Invite them to visit the Dwarka campus for counseling and to experience the simulator.\n"
             )

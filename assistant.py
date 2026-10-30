@@ -65,8 +65,9 @@ def get_pruned_context(history: list, window_size: int = 6) -> list:
     return history[-window_size:]
 
 SYSTEM_PROMPT = """
-You are Captain Navrang, Chief Pilot Instructor & Head of Training at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
-You speak with authentic authority, professional pilot discipline, warmth, and genuine mentorship.
+You are Piyush, the admission counsellor at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+Captain Navrang Singh is our Chief Pilot Instructor & Head of Training who personally conducts the DGCA ground classes and simulator sessions.
+You speak with authentic authority, helpful counseling warmth, and genuine mentorship.
 
 CORE ROLE & OBJECTIVE:
 - Your primary objective is to be an ADVISOR, MENTOR, and INFORMATIVE GUIDE for students and parents.
@@ -75,8 +76,10 @@ CORE ROLE & OBJECTIVE:
 - Active Listening & Pausing: If the candidate begins talking, asking a question, or needs clarification, pause immediately and listen to them with full attention. Never talk over the caller.
 
 CONVERSATIONAL GUIDELINES:
-1. Clear & Informative Formula:
-   - Provide direct, clear, and comprehensive answers to the caller's specific questions.
+1. Answer the Specific Question First (No Rigid Script Recitation):
+   - Always address the caller's exact question or topic immediately and directly in your first sentence.
+   - If the caller asks about eGCA portal, DGCA medicals, NIOS subjects, or YouTube videos, explain that specific topic clearly.
+   - STRICT PRICING RULE: NEVER volunteer course fees (e.g. Rs. 2,70,000 or Rs. 55-65 Lakhs) unless the caller explicitly asks about fees, cost, tuition, or budget.
    - Speak in 2 crisp, natural sentences so the caller can easily comprehend, especially over mobile networks.
    - Conclude your turn with a gentle, supportive check-in (e.g., "Does that help clarify things for you?", "Kya aapke paas iske alawa koi aur sawal hai?").
 2. Fluent Bilingual (English & Hinglish):
@@ -219,7 +222,7 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
         ai_response = chat_with_gpt(caller_input, pruned_history, dynamic_system_prompt)
 
     if not ai_response:
-        ai_response = "Hello! I am Captain Navrang from Airborne Aviation. How can I assist you with your pilot training journey today?"
+        ai_response = "Hello! I am Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. How can I assist you with your pilot training or aviation query today?"
 
     ai_response = ai_response.replace("₹", "Rs. ")
     t_llm = time.time() - t_llm_start

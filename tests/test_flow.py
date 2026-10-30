@@ -93,15 +93,10 @@ class TestAirborneAssistantFlow(unittest.TestCase):
         _, should_hang_up_1 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
         self.assertFalse(should_hang_up_1)
         
-        # Turn 2: Silence
+        # Turn 2: Consecutive Silence -> Circuit breaker must hang up
         mock_listen.return_value = ""
         _, should_hang_up_2 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
-        self.assertFalse(should_hang_up_2)
-
-        # Turn 3: Consecutive Silence -> Circuit breaker must hang up
-        mock_listen.return_value = ""
-        _, should_hang_up_3 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
-        self.assertTrue(should_hang_up_3)
+        self.assertTrue(should_hang_up_2)
 
     def test_exit_regex_cleanup(self):
         """

@@ -26,7 +26,8 @@ GEMINI_MODEL = _clean_env("GEMINI_MODEL", "gemini-3.8-flash")
 USE_ELEVENLABS = _clean_env("USE_ELEVENLABS", "true").lower() == "true"
 ELEVENLABS_API_KEY = _clean_env("ELEVENLABS_API_KEY", "")
 ELEVENLABS_KEY_ID = _clean_env("ELEVENLABS_KEY_ID", "")
-ELEVENLABS_VOICE_ID = _clean_env("ELEVENLABS_VOICE_ID", "eJTrVjiaPKqBMpMujQdM")
+ELEVENLABS_VOICE_ID_PIYUSH = _clean_env("ELEVENLABS_VOICE_ID_PIYUSH", "")
+ELEVENLABS_VOICE_ID = ELEVENLABS_VOICE_ID_PIYUSH or _clean_env("ELEVENLABS_VOICE_ID", "eJTrVjiaPKqBMpMujQdM")
 ELEVENLABS_MODEL_ID = _clean_env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 ELEVENLABS_AGENT_ID = _clean_env("ELEVENLABS_AGENT_ID", "agent_5701kztar977fxsb7nj7cxedcrgf")
 

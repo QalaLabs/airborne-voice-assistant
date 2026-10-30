@@ -77,7 +77,7 @@ AGENT_TOKEN = config.AGENT_TOKEN or os.getenv("AGENT_TOKEN", "")
 # Phone audio is narrowband; Piopiy docs recommend 16 kHz PCM to avoid heavy resampling latency.
 TTS_SAMPLE_RATE = int(os.getenv("WORKER_TTS_SAMPLE_RATE", "16000"))
 # Cellular ring-trip clicks / carrier spikes must not cancel the greeting before the caller hears it.
-BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "1.2"))
+BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "0.3"))
 
 
 class GraceWindowInterruptionStrategy(MinWordsUserTurnStartStrategy):
@@ -128,11 +128,11 @@ class FastEdgeTTSService(TTSService):
         clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
         if not clean_text:
             return
-        logger.info(f"🤖 Agent Speaking: '{clean_text}'")
+        logger.info(f"🤖 Piyush, the admission counsellor Speaking (EdgeTTS): '{clean_text}'")
         yield BotStartedSpeakingFrame()
         yield TTSStartedFrame()
         try:
-            comm = edge_tts.Communicate(clean_text, self._voice, rate="+15%")
+            comm = edge_tts.Communicate(clean_text, self._voice, rate="+0%")
             chunks = []
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
@@ -143,6 +143,9 @@ class FastEdgeTTSService(TTSService):
                 pcm_bytes = decoded.samples.tobytes()
                 chunk_size = self._sample_rate // 25 * 2  # ~40ms chunks of 16-bit mono PCM
                 for i in range(0, len(pcm_bytes), chunk_size):
+                    if hasattr(self, "_processing_text") and not self._processing_text:
+                        logger.info("EdgeTTS playback cancelled by user interruption.")
+                        break
                     piece = pcm_bytes[i:i + chunk_size]
                     yield TTSAudioRawFrame(piece, self._sample_rate, 1)
         except Exception as e:
@@ -206,7 +209,7 @@ class FastStreamingElevenLabsTTS(TTSService):
         clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
         if not clean_text:
             return
-        logger.info(f"🎙️ Captain Navrang Speaking (ElevenLabs): '{clean_text}'")
+        logger.info(f"🎙️ Piyush, the admission counsellor Speaking (ElevenLabs): '{clean_text}'")
         def _boost_pcm(chunk_bytes):
             try:
                 import numpy as np
@@ -222,6 +225,9 @@ class FastStreamingElevenLabsTTS(TTSService):
             if clean_text in self._cached_pcm:
                 logger.info(f"⚡ Serving pre-cached 0ms audio for: '{clean_text[:40]}...'")
                 for chunk in self._cached_pcm[clean_text]:
+                    if hasattr(self, "_processing_text") and not self._processing_text:
+                        logger.info("ElevenLabs cached playback cancelled by user interruption.")
+                        break
                     yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
             else:
                 # 2. Sub-second dynamic streaming reusing persistent keep-alive client with latency level 4
@@ -231,14 +237,18 @@ class FastStreamingElevenLabsTTS(TTSService):
                     "text": clean_text,
                     "model_id": self._model_id,
                     "voice_settings": {
-                        "stability": 0.5,
-                        "similarity_boost": 0.75
+                        "stability": 0.55,
+                        "similarity_boost": 0.80,
+                        "speed": 0.95
                     }
                 }
                 client = self._get_client()
                 async with client.stream("POST", url, headers=headers, json=payload) as resp:
                     if resp.status_code == 200:
                         async for chunk in resp.aiter_bytes(chunk_size=960):
+                            if hasattr(self, "_processing_text") and not self._processing_text:
+                                logger.info("ElevenLabs streaming cancelled by user interruption.")
+                                break
                             yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
                     else:
                         logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
@@ -428,7 +438,7 @@ def init_audio_stack():
         try:
             vad_params = VADParams(
                 start_secs=0.15,
-                stop_secs=0.55,
+                stop_secs=0.95,
                 confidence=0.65,
                 min_volume=0.35
             ) if VADParams else None
