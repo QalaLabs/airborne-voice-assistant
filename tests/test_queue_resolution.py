@@ -157,6 +157,45 @@ class QueueResolutionTests(unittest.TestCase):
         self.assertEqual(data["status"], "found")
         self.assertEqual(data["call"]["status"], "CONNECTED")
 
+    def test_pcmo_connect_pipeline_schema_valid_against_real_piopiy_validator(self):
+        """Ensures that the connect action pipeline strictly conforms to Piopiy validators."""
+        from piopiy.voice.validators import _validate_connect_action, validate_pcmo_call_request
+
+        caller_id = "917948568600"
+        app_id = "edc5b96c-9e10-4b1f-b2b0-528da3c30978"
+
+        pipeline = [
+            {
+                "action": "connect",
+                "params": {
+                    "caller_id": caller_id,
+                    "options": {
+                        "recording": {
+                            "enabled": True
+                        }
+                    }
+                },
+                "endpoints": [
+                    {
+                        "type": "agent",
+                        "id": app_id
+                    }
+                ]
+            }
+        ]
+
+        # 1. Action level validator
+        _validate_connect_action(pipeline[0], "pipeline[0]")
+
+        # 2. Top-level PCMO call payload validator
+        payload = {
+            "caller_id": caller_id,
+            "to_number": "919818282209",
+            "app_id": app_id,
+            "pipeline": pipeline
+        }
+        validate_pcmo_call_request(payload)
+
 
 if __name__ == "__main__":
     unittest.main()

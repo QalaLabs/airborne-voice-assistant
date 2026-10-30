@@ -612,7 +612,7 @@ def record_call_outcome(
                     activity_title,
                     activity_notes,
                     next_follow_up,
-                    now if outcome in ["CONNECTED", "COMPLETED", "EARLY_HANGUP"] else None,
+                    now if outcome not in ["INITIATED", "IN_PROGRESS", "RINGING", "DISPATCHED", "QUEUED"] else None,
                     duration_mins,
                     json.dumps(activity_metadata),
                     existing_act_id
@@ -632,7 +632,7 @@ def record_call_outcome(
                     activity_notes,
                     outcome,
                     next_follow_up,
-                    now if outcome in ["CONNECTED", "COMPLETED", "EARLY_HANGUP"] else None,
+                    now if outcome not in ["INITIATED", "IN_PROGRESS", "RINGING", "DISPATCHED", "QUEUED"] else None,
                     duration_mins,
                     json.dumps(activity_metadata)
                 ))
@@ -640,7 +640,7 @@ def record_call_outcome(
             # Update calling_jobs table if it exists
             if lead_id or provider_call_id:
                 try:
-                    final_job_status = "COMPLETED" if outcome in ["CONNECTED", "COMPLETED"] else "FAILED"
+                    final_job_status = "COMPLETED" if outcome in ["CONNECTED", "COMPLETED"] else ("FAILED" if outcome in ["FAILED", "NO_ANSWER", "BUSY", "MISSED", "REJECTED", "STALLED_CARRIER_OR_DND", "FALLBACK_FAILED", "CANCELLED", "UNAVAILABLE"] else outcome)
                     cur.execute("""
                         UPDATE calling_jobs SET
                             status = %s::"CallingJobStatus",

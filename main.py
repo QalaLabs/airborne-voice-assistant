@@ -583,7 +583,14 @@ def _agent_connect_pcmo():
     caller_id = raw_caller if len(raw_caller) > 10 else f"91{raw_caller}"
     return [{
         "action": "connect",
-        "params": {"caller_id": caller_id, "record": True},
+        "params": {
+            "caller_id": caller_id,
+            "options": {
+                "recording": {
+                    "enabled": True
+                }
+            }
+        },
         "endpoints": [{"type": "agent", "id": agent_id}],
     }]
 
@@ -682,7 +689,11 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
                     "action": "connect",
                     "params": {
                         "caller_id": caller_id,
-                        "record": True
+                        "options": {
+                            "recording": {
+                                "enabled": True
+                            }
+                        }
                     },
                     "endpoints": [
                         {

@@ -98,7 +98,11 @@ def _execute_pcmo_fallback(parent_request_id: str, formatted_phone: str, lead_na
                 "action": "connect",
                 "params": {
                     "caller_id": caller_id,
-                    "record": True
+                    "options": {
+                        "recording": {
+                            "enabled": True
+                        }
+                    }
                 },
                 "endpoints": [
                     {
@@ -145,6 +149,18 @@ def _execute_pcmo_fallback(parent_request_id: str, formatted_phone: str, lead_na
                 print(f"Telephony: [ALERT] Secondary PCMO fallback to {formatted_phone} also stalled in queue. Marking STALLED_CARRIER_OR_DND.")
                 mark_call_progress(formatted_phone, "STALLED_CARRIER_OR_DND")
                 release_active_call(formatted_phone)
+                try:
+                    import database
+                    database.record_call_outcome(
+                        phone=formatted_phone,
+                        outcome="STALLED_CARRIER_OR_DND",
+                        direction="outbound",
+                        duration=0,
+                        summary="Call stalled in carrier queue without ringing (PSTN/DND timeout).",
+                        provider_call_id=fallback_req
+                    )
+                except Exception as de:
+                    print(f"Telephony Notice: DB update on secondary fallback timeout: {de}")
 
         sec_timer = threading.Timer(8.0, _secondary_check)
         sec_timer.daemon = True
@@ -154,6 +170,18 @@ def _execute_pcmo_fallback(parent_request_id: str, formatted_phone: str, lead_na
         print(f"Telephony Error: Automatic PCMO fallback failed: {e}")
         mark_call_progress(formatted_phone, "FALLBACK_FAILED")
         release_active_call(formatted_phone)
+        try:
+            import database
+            database.record_call_outcome(
+                phone=formatted_phone,
+                outcome="FAILED",
+                direction="outbound",
+                duration=0,
+                summary=f"Automatic PCMO fallback failed: {e}",
+                provider_call_id=parent_request_id
+            )
+        except Exception as de:
+            print(f"Telephony Notice: DB update on fallback exception: {de}")
 
 def _schedule_delivery_verification(request_id: str, formatted_phone: str, lead_name: str, precall_data: dict, timeout_secs: float = CALL_VERIFICATION_TIMEOUT_SECS):
     """
@@ -355,7 +383,11 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
                     "action": "connect",
                     "params": {
                         "caller_id": caller_id,
-                        "record": True
+                        "options": {
+                            "recording": {
+                                "enabled": True
+                            }
+                        }
                     },
                     "endpoints": [
                         {

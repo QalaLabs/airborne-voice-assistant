@@ -62,7 +62,7 @@ TELECMI_WEBHOOK_TOKEN = _clean_env("TELECMI_WEBHOOK_TOKEN", "")
 
 # Outbound Telephony Queue Recovery & PCMO Override
 CALL_VERIFICATION_TIMEOUT_SECS = float(_clean_env("CALL_VERIFICATION_TIMEOUT_SECS", "6.0"))
-FORCE_PCMO_OUTBOUND = _clean_env("FORCE_PCMO_OUTBOUND", "false").lower() in ("1", "true", "yes")
+FORCE_PCMO_OUTBOUND = _clean_env("FORCE_PCMO_OUTBOUND", "true").lower() in ("1", "true", "yes")
 
 
 # Booking & Automations Settings
