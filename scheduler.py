@@ -10,7 +10,7 @@ except ImportError:
 
 IST = timezone(timedelta(hours=5, minutes=30))
 CALL_WINDOW_START_HOUR = 9    # no automated calls before 09:00 IST
-CALL_WINDOW_END_HOUR = 20     # none at or after 20:00 IST
+CALL_WINDOW_END_HOUR = 19     # none at or after 19:00 IST
 
 # Lead statuses that must never be auto-dialled again.
 DO_NOT_CALL_STATUSES = {
@@ -54,7 +54,7 @@ def next_window_open(now: datetime = None) -> datetime:
 def trigger_call_job(lead_name: str, lead_phone: str):
     """
     Background job that executes after the delay to trigger the outbound call.
-    Skips leads that opted out / are invalid and defers calls outside 09:00-20:00 IST.
+    Skips leads that opted out / are invalid and defers calls outside 09:00-19:00 IST.
     """
     print(f"Executing scheduled call for {lead_name} ({lead_phone})...")
     lead = supabase_client.get_lead_by_phone(lead_phone)

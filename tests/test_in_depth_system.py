@@ -188,7 +188,7 @@ class OutgoingCallingTests(unittest.TestCase):
             self.assertIn("kyc_not_verified", res.json().get("error", ""))
 
     def test_calling_window_hours_enforcement(self):
-        """Test calling hours constraint (09:00 to 20:00 IST)."""
+        """Test calling hours constraint (09:00 to 19:00 IST)."""
         ist = scheduler.IST
         # 11:30 AM IST (inside window)
         dt_inside = datetime(2026, 10, 18, 11, 30, tzinfo=ist)
@@ -197,6 +197,10 @@ class OutgoingCallingTests(unittest.TestCase):
         # 07:45 AM IST (before window)
         dt_early = datetime(2026, 10, 18, 7, 45, tzinfo=ist)
         self.assertFalse(scheduler.in_call_window(dt_early))
+
+        # 19:00 IST is the first closed minute; 18:59 is still open
+        self.assertFalse(scheduler.in_call_window(datetime(2026, 10, 18, 19, 0, tzinfo=ist)))
+        self.assertTrue(scheduler.in_call_window(datetime(2026, 10, 18, 18, 59, tzinfo=ist)))
 
         # 21:15 PM IST (after window)
         dt_late = datetime(2026, 10, 18, 21, 15, tzinfo=ist)
