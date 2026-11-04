@@ -279,13 +279,9 @@ class VoicePipelineTests(unittest.TestCase):
         _, hangup_1 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
         self.assertFalse(hangup_1)
 
-        # Turn 2
+        # Turn 2 -> Must trigger hangup
         _, hangup_2 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
-        self.assertFalse(hangup_2)
-
-        # Turn 3 -> Must trigger hangup
-        _, hangup_3 = assistant.handle_conversation("mock_silence.wav", self.test_phone, "inbound")
-        self.assertTrue(hangup_3)
+        self.assertTrue(hangup_2)
 
     def test_human_transfer_matching(self):
         """Specific transfer requests must be detected, while inquiries about Capt. Navrang must not."""

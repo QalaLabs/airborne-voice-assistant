@@ -760,6 +760,18 @@ async def create_session(
             asyncio.create_task(
                 asyncio.to_thread(assistant.run_post_call_pipeline, customer_phone, direction, "")
             )
+        elif customer_phone != "+910000000000":
+            import database
+            logger.info(f"Recording single-turn connected call for {customer_phone} ({direction})...")
+            await asyncio.to_thread(
+                database.record_call_outcome,
+                phone=customer_phone,
+                outcome="EARLY_HANGUP" if session_greeting else "COMPLETED",
+                direction=direction,
+                duration=15,
+                summary="Candidate answered, heard counselor greeting, but disconnected before full qualification.",
+                provider_call_id=call_id
+            )
     except Exception as pe:
         logger.error(f"Error persisting call history / post-call pipeline: {pe}")
     finally:

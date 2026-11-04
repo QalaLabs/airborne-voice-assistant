@@ -4,7 +4,20 @@ from fastapi.staticfiles import StaticFiles
 try:
     from twilio.twiml.voice_response import VoiceResponse
 except ImportError:
-    VoiceResponse = None
+    class VoiceResponse:
+        def __init__(self):
+            self.elements = []
+        def play(self, url):
+            self.elements.append(f"<Play>{url}</Play>")
+        def record(self, **kwargs):
+            attrs = " ".join(f'{k}="{v}"' for k, v in kwargs.items())
+            self.elements.append(f"<Record {attrs}/>")
+        def say(self, text, **kwargs):
+            attrs = " ".join(f'{k}="{v}"' for k, v in kwargs.items())
+            attr_str = f" {attrs}" if attrs else ""
+            self.elements.append(f"<Say{attr_str}>{text}</Say>")
+        def __str__(self):
+            return f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  " + "\n  ".join(self.elements) + "\n</Response>"
 import uvicorn
 import os
 import hmac

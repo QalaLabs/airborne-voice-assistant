@@ -644,7 +644,6 @@ def record_call_outcome(
                     cur.execute("""
                         UPDATE calling_jobs SET
                             status = %s::"CallingJobStatus",
-                            "completedAt" = CURRENT_TIMESTAMP,
                             "callCompletedAt" = CURRENT_TIMESTAMP,
                             "durationSecs" = %s,
                             "recordingUrl" = COALESCE(%s, "recordingUrl"),

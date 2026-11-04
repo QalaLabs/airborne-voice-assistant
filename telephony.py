@@ -10,7 +10,7 @@ MAX_CONCURRENT_CALLS = 2
 _active_calls_lock = threading.Lock()
 _active_calls = {}
 
-CALL_VERIFICATION_TIMEOUT_SECS = float(os.getenv("CALL_VERIFICATION_TIMEOUT_SECS", "6.0"))
+CALL_VERIFICATION_TIMEOUT_SECS = float(os.getenv("CALL_VERIFICATION_TIMEOUT_SECS", "35.0"))
 FORCE_PCMO_OUTBOUND = os.getenv("FORCE_PCMO_OUTBOUND", "false").lower() in ("1", "true", "yes")
 
 _dispatched_calls_lock = threading.Lock()
