@@ -186,6 +186,5 @@ def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", js
         })
 
     return (
-        "Thank you for asking. Airborne Aviation Dwarka is Dwarka's leading ground classes school. "
-        "Our Commercial Pilot License (CPL) program costs 2,70,000, and classes are mentored by Captain Navrang Singh."
+        "Thank you for contacting Airborne Aviation Academy, Dwarka. Captain Navrang Singh and our admissions team are here to help guide your pilot training journey. Which program or questions can I assist you with today?"
     )

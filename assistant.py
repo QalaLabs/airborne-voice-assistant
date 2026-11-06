@@ -470,22 +470,29 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
                 print(f"Notice: Could not forward post-call completion to admin: {admin_err}")
         
         # 2. Synchronize with external TeleCRM if configured
-        lead_payload = {
-            "name": resolved_name,
-            "phone": phone,
-            "course_interest": data["course_interest"],
-            "classification": data["classification"],
-            "recording_url": final_recording_url
-        }
-        crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
+        try:
+            lead_payload = {
+                "name": resolved_name,
+                "phone": phone,
+                "course_interest": data["course_interest"],
+                "classification": data["classification"],
+                "recording_url": final_recording_url
+            }
+            crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
+        except Exception as crm_err:
+            print(f"Post-Call Notice: TeleCRM sync error ({crm_err})")
 
         # 3. Trigger WhatsApp automated follow-up
-        automation.trigger_post_call_automations(phone, data["classification"], resolved_name)
+        try:
+            automation.trigger_post_call_automations(phone, data["classification"], resolved_name)
+        except Exception as auto_err:
+            print(f"Post-Call Notice: WhatsApp post-call automation error ({auto_err})")
         
-        # 4. Clear dialogue session
-        clear_session(phone)
         print(f"Post-Call: Pipeline completed for {phone}.")
+    except Exception as pipeline_err:
+        print(f"Post-Call Error: Pipeline failed ({pipeline_err})")
     finally:
+        clear_session(phone)
         with _pipelines_lock:
             _active_pipelines.discard(cleaned_phone)
 

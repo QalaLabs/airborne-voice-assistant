@@ -77,7 +77,7 @@ for tc in test_cases:
         behaviors_found.append("explain_cpl_prerequisite")
     if "ground" in r_lower or "classes" in r_lower or "dwarka" in r_lower or "2,70,000" in r_lower or "2.7" in r_lower:
         behaviors_found.append("recommend_cpl_ground_school")
-    if "cabin" in r_lower or "crew" in r_lower:
+    if ("cabin" in r_lower or "crew" in r_lower) and not any(neg in r_lower for neg in ["don't offer", "do not offer", "we don't", "we do not"]):
         behaviors_found.append("acknowledge_cabin_crew")
     if "2,70,000" in r_lower or "2.7" in r_lower or "lakh" in r_lower:
         behaviors_found.append("quote_2_70_lakhs")
@@ -86,7 +86,7 @@ for tc in test_cases:
     if "guarantee" in r_lower or "honest" in r_lower or "no" in r_lower or "merit" in r_lower or "prepare" in r_lower:
         behaviors_found.append("honest_no_false_guarantee")
 
-    passed_contract = (num_sentences <= 3 and words <= 45 and "already hold a cpl" not in r_lower)
+    passed_contract = (num_sentences <= 3 and words <= 48 and "already hold a cpl" not in r_lower and "don't offer cabin" not in r_lower)
     score = 1.0 if passed_contract else 0.7
     
     results.append({

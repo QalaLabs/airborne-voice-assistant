@@ -16,18 +16,38 @@ except ImportError:
 # Get PostgreSQL Connection String
 DATABASE_URL = os.environ.get("DATABASE_URL", os.environ.get("POSTGRES_URL", ""))
 
+import time
+
 _pool = None
+_db_circuit_open_until = 0.0
+DB_CIRCUIT_BREAKER_SECS = 60.0
+
+def _is_circuit_open() -> bool:
+    return time.time() < _db_circuit_open_until
+
+def _trip_circuit(reason: str):
+    global _db_circuit_open_until, _pool
+    _pool = None
+    _db_circuit_open_until = time.time() + DB_CIRCUIT_BREAKER_SECS
+    print(f"Database Notice: Circuit breaker open for {int(DB_CIRCUIT_BREAKER_SECS)}s ({reason}). Operating in zero-latency fallback mode.")
+
+def _format_dsn(url: str, timeout_secs: int = 2) -> str:
+    if not url:
+        return ""
+    if "connect_timeout=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}connect_timeout={timeout_secs}"
 
 def get_pool():
     global _pool
     if os.environ.get("TESTING", "").lower() in ("true", "1") or os.environ.get("PYTEST_CURRENT_TEST") is not None:
         return None
+    if _is_circuit_open():
+        return None
     if _pool is None and DATABASE_URL and ThreadedConnectionPool:
         try:
-            dsn = DATABASE_URL
-            if "connect_timeout" not in dsn:
-                separator = "&" if "?" in dsn else "?"
-                dsn = f"{dsn}{separator}connect_timeout=3"
+            dsn = _format_dsn(DATABASE_URL, timeout_secs=2)
             _pool = ThreadedConnectionPool(
                 minconn=1,
                 maxconn=10,
@@ -35,7 +55,7 @@ def get_pool():
                 cursor_factory=RealDictCursor
             )
         except Exception as e:
-            print(f"Database Pool Creation Error: {e}")
+            _trip_circuit(f"Pool init failed: {e}")
             _pool = None
     return _pool
 
@@ -69,10 +89,11 @@ class PooledConnectionWrapper:
 def get_connection():
     """
     Creates and returns a PostgreSQL connection from the connection pool (with direct fallback).
+    Guarded by a zero-latency circuit breaker to avoid hanging event loops on unreachable DBs.
     """
     if os.environ.get("TESTING", "").lower() in ("true", "1") or os.environ.get("PYTEST_CURRENT_TEST") is not None:
         return None
-    if not DATABASE_URL or not psycopg2:
+    if not DATABASE_URL or not psycopg2 or _is_circuit_open():
         return None
 
     pool = get_pool()
@@ -84,16 +105,16 @@ def get_connection():
         except Exception as e:
             print(f"Database Pool Checkout Error: {e}")
 
+    if _is_circuit_open():
+        return None
+
     try:
-        dsn = DATABASE_URL
-        if "connect_timeout" not in dsn:
-            separator = "&" if "?" in dsn else "?"
-            dsn = f"{dsn}{separator}connect_timeout=3"
+        dsn = _format_dsn(DATABASE_URL, timeout_secs=2)
         conn = psycopg2.connect(dsn, cursor_factory=RealDictCursor)
         conn.autocommit = True
         return conn
     except Exception as e:
-        print(f"Database Connection Error: {e}")
+        _trip_circuit(f"Direct connection failed: {e}")
         return None
 
 def init_db():

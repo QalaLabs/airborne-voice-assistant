@@ -320,7 +320,7 @@ CORE CONVERSATIONAL PRINCIPLES:
      b) The caller has received full answers to their queries AND expressed positive readiness to explore next steps.
    - Never push an outcome or CTA on a caller who is still asking questions, hesitating, or confused.
 
-3. Two-Sentence Delivery: Keep responses to 1 or 2 crisp, clear sentences (under 30 words total).
+3. Two-Sentence Delivery (STRICT BREVITY): Keep responses strictly under 35 words and at most 2 crisp sentences for spoken voice telephony.
    - Sentence 1: Direct answer to the caller's exact inquiry.
    - Sentence 2: Essential context or a gentle check-in on their understanding (NOT an aggressive sales CTA).
 3. Fluent Bilingual (English & Hinglish):
@@ -340,6 +340,7 @@ CORE CONVERSATIONAL PRINCIPLES:
             # Pre-load full academy ground-truth cheat-sheet so model NEVER needs mid-call RAG queries!
             all_courses_snippet = (
                 COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["a320"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["simulator"] + "\n" +
@@ -394,6 +395,7 @@ INBOUND CONVERSATIONAL DIRECTIVES:
             # Provide CPL Ground School knowledge (the required foundation) + A320 simulator info
             knowledge_snippet = (
                 COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["a320"]
             )
         elif "sim" in course_lower:
@@ -429,7 +431,8 @@ CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
                 "  1. Greet them warmly regarding their inquiry for airline interview preparation.\n"
                 "  2. Clarify gently whether they are aspiring to become an airline pilot or looking at cabin crew.\n"
                 "  3. If pilot: Explain kindly that to sit for airline pilot interviews and selections, a candidate must first clear DGCA exams and obtain a CPL (Commercial Pilot License).\n"
-                "  4. Guide them that the essential starting point is DGCA CPL Ground Training (covering all 5 DGCA papers + RTR aero) at Airborne Aviation Academy, Dwarka under Chief Instructor Capt. Navrang Singh, followed by 200 flying hours. Only quote fees if they ask about pricing.\n"
+                "  4. If cabin crew: Confirm warmly that Airborne Aviation Academy offers Cabin Crew training at Ramphal Chowk, Dwarka campus (10+2 any stream, age 18-27, grooming, safety, and airline interview prep). Never state that Airborne does not offer cabin crew.\n"
+                "  5. Guide them that the essential starting point for pilots is DGCA CPL Ground Training (covering all 5 DGCA papers + RTR aero) at Airborne Aviation Academy, Dwarka under Chief Instructor Capt. Navrang Singh, followed by 200 flying hours. Only quote fees if they ask about pricing.\n"
                 "  5. Mention that our Dwarka campus has an onsite Airbus A320 simulator so students get early airline cockpit familiarity from day one.\n"
                 "  6. Invite them to visit the Dwarka campus for counseling and to experience the simulator.\n"
             )
