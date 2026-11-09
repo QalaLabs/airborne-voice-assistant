@@ -2,13 +2,18 @@ import os
 import requests
 import threading
 import time
+import collections
 import config
 import database
 import supabase_client
 
-MAX_CONCURRENT_CALLS = 2
+MAX_CONCURRENT_CALLS = int(getattr(config, "MAX_CONCURRENT_CALLS", os.getenv("MAX_CONCURRENT_CALLS", 4)))
 _active_calls_lock = threading.Lock()
 _active_calls = {}
+
+# In-memory FIFO queue for calls waiting for a free agent slot
+_call_waiting_queue = collections.deque()
+_queue_lock = threading.Lock()
 
 CALL_VERIFICATION_TIMEOUT_SECS = float(os.getenv("CALL_VERIFICATION_TIMEOUT_SECS", "35.0"))
 FORCE_PCMO_OUTBOUND = os.getenv("FORCE_PCMO_OUTBOUND", "false").lower() in ("1", "true", "yes")
@@ -210,10 +215,10 @@ def _schedule_delivery_verification(request_id: str, formatted_phone: str, lead_
         _active_watchers[request_id] = timer
     timer.start()
 
-ACTIVE_CALL_TIMEOUT_SECS = 120
+ACTIVE_CALL_TIMEOUT_SECS = 300
 
 def get_active_calls_count() -> int:
-    """Returns number of active concurrent calls, pruning expired leases (>2 mins)."""
+    """Returns number of active concurrent calls, pruning expired leases (>5 mins)."""
     with _active_calls_lock:
         now = time.time()
         expired = [p for p, t in _active_calls.items() if now - t > ACTIVE_CALL_TIMEOUT_SECS]
@@ -223,7 +228,7 @@ def get_active_calls_count() -> int:
 
 def register_active_call(phone: str) -> bool:
     """
-    Attempts to acquire a call slot under the MAX_CONCURRENT_CALLS (2) limit.
+    Attempts to acquire a call slot under the MAX_CONCURRENT_CALLS limit.
     Returns True if registered, False if concurrency limit is reached.
     """
     with _active_calls_lock:
@@ -236,18 +241,91 @@ def register_active_call(phone: str) -> bool:
         _active_calls[phone] = now
         return True
 
+def enqueue_pending_call(phone_number: str, lead_name: str = None, precall_data: dict = None) -> int:
+    """Enqueues a call request in the waiting line when all concurrency slots are currently busy."""
+    with _queue_lock:
+        clean_new = "".join(filter(str.isdigit, phone_number))
+        for idx, item in enumerate(_call_waiting_queue):
+            if "".join(filter(str.isdigit, item["phone_number"])) == clean_new:
+                return idx + 1
+        _call_waiting_queue.append({
+            "phone_number": phone_number,
+            "lead_name": lead_name,
+            "precall_data": precall_data,
+            "enqueued_at": time.time()
+        })
+        return len(_call_waiting_queue)
+
+def get_waiting_queue_status() -> dict:
+    """Returns current state of the call waiting queue."""
+    with _queue_lock:
+        return {
+            "max_concurrent_calls": MAX_CONCURRENT_CALLS,
+            "active_calls_count": get_active_calls_count(),
+            "queued_count": len(_call_waiting_queue),
+            "queue": [
+                {
+                    "position": idx + 1,
+                    "phone": it["phone_number"],
+                    "name": it["lead_name"],
+                    "wait_seconds": int(time.time() - it["enqueued_at"])
+                }
+                for idx, it in enumerate(list(_call_waiting_queue))
+            ]
+        }
+
+def clear_waiting_queue() -> int:
+    """Clears all calls currently waiting in line."""
+    with _queue_lock:
+        count = len(_call_waiting_queue)
+        _call_waiting_queue.clear()
+        print(f"Telephony: Cleared {count} calls from waiting queue.")
+        return count
+
+def _drain_waiting_queue():
+    """
+    Checks if active calls are below MAX_CONCURRENT_CALLS and dispatches the next queued call(s) FIFO.
+    """
+    time.sleep(0.5)
+    while get_active_calls_count() < MAX_CONCURRENT_CALLS:
+        with _queue_lock:
+            if not _call_waiting_queue:
+                break
+            item = _call_waiting_queue.popleft()
+        
+        # Check expiration (> 30 mins)
+        if time.time() - item.get("enqueued_at", 0) > 1800:
+            print(f"Telephony: [LINE-UP] Queued call for {item['phone_number']} expired (>30m). Skipping.")
+            continue
+            
+        print(f"Telephony: [LINE-UP] Line freed! Auto-dispatching queued lead: {item['lead_name']} ({item['phone_number']})...")
+        try:
+            dispatch_outbound_call(
+                phone_number=item["phone_number"],
+                lead_name=item["lead_name"],
+                precall_data=item["precall_data"]
+            )
+        except Exception as e:
+            print(f"Telephony Error: Auto-dispatching lined up call failed: {e}")
+        time.sleep(1.0)
+
 def release_active_call(phone: str):
-    """Releases an active call slot when the call concludes or fails."""
+    """Releases an active call slot when the call concludes or fails, and dispatches the next call in line."""
+    released = False
     with _active_calls_lock:
         digits = "".join(filter(str.isdigit, phone))
         to_remove = [k for k in _active_calls if k == phone or "".join(filter(str.isdigit, k)) == digits]
         for k in to_remove:
             _active_calls.pop(k, None)
+            released = True
+    if released:
+        threading.Thread(target=_drain_waiting_queue, daemon=True).start()
 
 def clear_all_active_calls():
-    """Forces immediate reset of all active call concurrency slots."""
+    """Forces immediate reset of all active call concurrency slots and drains waiting queue."""
     with _active_calls_lock:
         _active_calls.clear()
+    threading.Thread(target=_drain_waiting_queue, daemon=True).start()
 
 try:
     from twilio.rest import Client
@@ -300,11 +378,19 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
         formatted_phone = "+" + clean_digits if not phone_number.startswith("+") else phone_number
         telecmi_to = clean_digits
             
-    # Enforce concurrency ceiling: maximum 2 calls simultaneously
+    # Enforce concurrency ceiling: maximum 4 calls simultaneously; line up if all lines busy
     if not register_active_call(formatted_phone):
-        err = f"Agent concurrency limit reached ({MAX_CONCURRENT_CALLS} concurrent calls). Call rejected."
-        print(f"Telephony: {err}")
-        return {"ok": False, "provider": None, "error": err, "request_id": None}
+        queue_pos = enqueue_pending_call(phone_number, lead_name, precall_data)
+        msg = f"All {MAX_CONCURRENT_CALLS} agent lines are currently busy. Call lined up in queue at position #{queue_pos}."
+        print(f"Telephony: [LINE-UP] {lead_name or 'Candidate'} ({formatted_phone}) - {msg}")
+        return {
+            "ok": True,
+            "provider": "telephony_queue",
+            "status": "QUEUED_LINE",
+            "queue_position": queue_pos,
+            "request_id": f"queue-{int(time.time()*1000)}",
+            "message": msg
+        }
 
     print(f"Telephony: Initiating outbound call to {lead_name or 'Candidate'} at {formatted_phone} (active calls: {get_active_calls_count()}/{MAX_CONCURRENT_CALLS})...")
     
