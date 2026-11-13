@@ -152,6 +152,9 @@ The conversational-reasoning core can optionally run on Google's Vertex AI Agent
 - **Outbound calls**: PioPiy SDK (`piopiy.RestClient(token=config.TELECMI_TOKEN)`), using `TELECMI_TOKEN` + `TELECMI_PIOPIY_APP_ID` + `TELECMI_PHONE_NUMBER` as caller ID. Falls back to the legacy TeleCMI REST API (`TELECMI_APP_ID` + `TELECMI_APP_SECRET`) if the SDK path fails, then to Twilio, then to a simulation-mode log.
 - **Inbound calls**: routed entirely via the `/telecmi/answer` webhook (PCMO JSON responses) — configure TeleCMI/PIOPIY's dashboard **Answer URL** to `https://<cloud-run-url>/telecmi/answer` (not `/answer-call`, which is Twilio-only and returns TwiML, not PCMO) and **Debug URL** to `/telecmi/events`.
 - The `/telecmi/events` webhook now validates a `?token=...` query param against `TELECMI_WEBHOOK_TOKEN` (see PR #5) when that env var is set — leave it unset to disable verification if TeleCMI's dashboard can't be configured to send it.
+- **Webhooks (Token & Webhooks dashboard tab)**:
+  - **Notify (Call Notification)**: Method POST, Server URL https://<cloud-run-url>/telecmi/events (delivers live signaling: ringing, answered, hangup).
+  - **Cdr (Call Report)**: Method POST, Server URL https://<cloud-run-url>/telecmi/events (delivers post-call metrics: duration, recording URL, CRM sync).
 
 If a call still fails with "we regret the call cannot be connected" after confirming the Answer/Debug URLs above: check `TELECMI_TOKEN`, `TELECMI_APP_ID`/`TELECMI_APP_SECRET`, `TELECMI_PIOPIY_APP_ID`, and `TELECMI_PHONE_NUMBER` against what TeleCMI's dashboard issues for this account, and check TeleCMI's own "CALL DETAILS" tab for the carrier-level rejection reason (account balance, number provisioning, etc. — these live outside this codebase entirely).
 
