@@ -42,7 +42,4 @@ sqlalchemy>=2.0.23
 # Scheduling & Utilities
 apscheduler>=3.11.3
 numpy>=1.24.0
-# Google ADK In-Process Telephony Engine & Critic
-google-adk>=2.14.0
-google-genai>=2.30.0
 
