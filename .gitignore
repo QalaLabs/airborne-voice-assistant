@@ -75,6 +75,9 @@ __pypackages__/
 
 # Environments
 .env
+.env.*
+.env*.yaml
+*.env.yaml
 .env.local
 .env.production
 .env.staging

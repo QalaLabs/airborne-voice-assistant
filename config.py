@@ -92,6 +92,10 @@ AGENT_ENGINE_ROLLOUT_PHONES = {
     p.strip() for p in _clean_env("AGENT_ENGINE_ROLLOUT_PHONES", "").split(",") if p.strip()
 }
 
+# In-process Google ADK Streaming Agent settings (disabled - direct ResilientGoogleLLMService is used for live production)
+USE_ADK_AGENT = _clean_env("USE_ADK_AGENT", "false").lower() in ("1", "true", "yes")
+ADK_ROLLOUT_PHONES = set()
+
 # Shared secret validated by the internal /internal/rag/query endpoint
 # (main.py), called by the ADK agent's search_knowledge tool (agent/rag_client.py).
 INTERNAL_RAG_SHARED_SECRET = _clean_env("INTERNAL_RAG_SHARED_SECRET", "")

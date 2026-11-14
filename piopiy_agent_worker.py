@@ -77,7 +77,7 @@ AGENT_TOKEN = config.AGENT_TOKEN or os.getenv("AGENT_TOKEN", "")
 # Phone audio is narrowband; Piopiy docs recommend 16 kHz PCM to avoid heavy resampling latency.
 TTS_SAMPLE_RATE = int(os.getenv("WORKER_TTS_SAMPLE_RATE", "16000"))
 # Cellular ring-trip clicks / carrier spikes must not cancel the greeting before the caller hears it.
-BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "1.5"))
+BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "0.5"))
 
 
 class GraceWindowInterruptionStrategy(MinWordsUserTurnStartStrategy):
@@ -352,6 +352,10 @@ CORE CONVERSATIONAL PRINCIPLES:
    - Cabin Crew: 10+2 any stream, age 18-27.
 5. Currency & Phonetics: Always say 'Rupees' or 'Lakhs'. Never use symbol '₹'.
 6. Location: Ramphal Chowk, Sector 7, Dwarka, New Delhi (near Dwarka Sector 9 metro station).
+7. Interruption Handling & Reconstruct Rule:
+   - When the caller speaks while you are talking, you must stop immediately and listen.
+   - RELEVANT INTERRUPTION (they answer your question, state their stream/age, or ask an aviation query): Address their input directly and sharply in 1 sentence, then continue.
+   - IRRELEVANT / HESITANT INTERRUPTION (they say 'Wait', 'Hold on', cough, stray background noise, or lose focus): Do NOT get confused or repeat previous words verbatim. Politely anchor ("Sure, take your time,", "Theek hai,") and RECONSTRUCT the discussion: restate the single core question simply to move the guidance forward.
 """
 
 GREETING_MESSAGE = "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. How may I guide your pilot training journey today?"
@@ -441,13 +445,13 @@ def init_audio_stack():
                     return await orig_handle_transcription(text, is_final, language)
                 shared_stt._handle_transcription = logged_handle_transcription
 
-        # Low-Network & Interruption-tuned VAD
+        # Low-Network & Sub-Second Latency Interruption-tuned VAD
         try:
             vad_params = VADParams(
-                start_secs=0.15,
-                stop_secs=0.95,
-                confidence=0.65,
-                min_volume=0.35
+                start_secs=0.10,
+                stop_secs=0.38,
+                confidence=0.60,
+                min_volume=0.30
             ) if VADParams else None
             shared_vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
             print("Whisper STT (BASE, 4 threads, greedy) & Silero VAD (tuned for low-network & barge-in) armed!")
@@ -672,6 +676,7 @@ async def create_session(
         max_tokens=75,
         temperature=0.3,
     )
+
     llm = ResilientGoogleLLMService(
         api_key=config.GEMINI_API_KEY,
         model=getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite",
@@ -767,6 +772,16 @@ async def create_session(
             asyncio.create_task(
                 asyncio.to_thread(assistant.run_post_call_pipeline, customer_phone, direction, "")
             )
+
+            # Post-Call Multi-Signal Critic & Training Loop
+            try:
+                from learning.critic import enqueue_post_call_critique
+                logger.info(f"🎓 Enqueuing post-call mistake critic for {customer_phone}...")
+                asyncio.create_task(
+                    enqueue_post_call_critique(customer_phone, call_history, direction, call_id)
+                )
+            except Exception as critic_e:
+                logger.warning(f"Notice enqueuing critic: {critic_e}")
         elif customer_phone != "+910000000000":
             import database
             logger.info(f"Recording single-turn connected call for {customer_phone} ({direction})...")

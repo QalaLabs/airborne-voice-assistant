@@ -1,51 +1,64 @@
+# ruff: noqa
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import datetime
+from zoneinfo import ZoneInfo
+
+from google.adk.agents import Agent
+from google.adk.apps import App
+from google.adk.models import Gemini
+from google.genai import types
+
+
+try:
+    from agent.tools import book_counseling_session, search_knowledge
+except ImportError:
+    try:
+        from tools import book_counseling_session, search_knowledge
+    except ImportError:
+        from app.tools import book_counseling_session, search_knowledge
+
+MODEL = "gemini-3.8-flash"
+
+AIRBORNE_INSTRUCTION = """You are Piyush, the Senior Admissions Counselor and Flight Training Advisor at Airborne Aviation Academy, Dwarka, New Delhi.
+You are speaking with a prospective student or parent inquiring about pilot training or aviation programs.
+
+CORE RULES:
+1. Turn Pacing & Brevity: Keep every turn strictly to 2-3 short, natural phone sentences. Avoid monologues.
+2. Language Mirroring: If the user speaks English, reply in natural, professional English. If the user speaks Hindi or Hinglish, reply in warm, fluent Hinglish.
+3. Currency Normalization: Always state currency as 'Rs.' or 'Rupees' (NEVER use the symbol '₹').
+4. Ground Truth: Airborne Aviation Academy is led by Captain Navrang Singh at Ramphal Chowk, Dwarka, New Delhi. Ground classes cover DGCA CPL exams (Air Navigation, Meteorology, Air Regulations, Technical General, and RTR). Full flying training is ~Rs. 55-65 Lakhs (200 hours).
+5. Always use the search_knowledge tool whenever asked about specific fees, eligibility, syllabus, or medical rules to ensure 100% factual accuracy.
+6. When a student expresses interest in visiting the campus or meeting Captain Navrang Singh, offer to book a consultation using the book_counseling_session tool.
 """
-ADK Agent definition for Airborne Aviation Academy's admissions/conversation
-core, deployed to Vertex AI Agent Engine.
 
-VERIFICATION NEEDED before this can be trusted to run (see the plan's
-"Unverified facts" section -- ADK/agents-cli docs were unreachable from the
-dev environment this was written in):
-  1. Exact ADK package name and import path for the Agent/LlmAgent class
-     (assumed here: `google.adk.agents.LlmAgent`, matching ADK's public
-     samples as of its initial releases -- confirm against the installed
-     package's actual API before deploying).
-  2. The symbol name `agents-cli deploy` / Agent Engine's SDK-based deploy
-     expect this module to expose (assumed here: `root_agent`, matching
-     current ADK sample conventions -- confirm and rename if different).
-  3. Whether ADK's model config exposes a `thinking_budget`/`thinking_config`
-     equivalent to the raw Gemini REST payload's
-     `generationConfig.thinkingConfig.thinkingBudget: 0` used in the
-     existing gpt_test.py (see .agents/rules/voice-telephony-llm.md -- this
-     is a hard latency requirement for phone calls). If ADK does not expose
-     this, treat it as a go/no-go blocker per the plan's latency
-     head-to-head verification step, not something to silently skip.
-  4. Confirm the model id string format ADK/Agent Engine expects (may not be
-     identical to the raw Generative Language API model names used in
-     gpt_test.py, e.g. "gemini-3.8-flash").
+root_agent = Agent(
+    # Keep in sync with agents-cli-manifest.yaml: agents-cli derives this name
+    # from the project `name:` recorded there, and telemetry reports it as
+    # gen_ai.agent.name. Renaming the agent only here makes the two disagree,
+    # and anything selecting traces by name stops finding this agent's.
+    name="airborne_agent_adk",
+    model=Gemini(
+        model=MODEL,
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    instruction=AIRBORNE_INSTRUCTION,
+    tools=[search_knowledge, book_counseling_session],
+)
 
-Do not deploy this without first running it through `agents run`
-(or ADK's local dev-loop equivalent) and the smoke test in
-agent/tests/test_agent_local.py.
-"""
-
-import os
-
-from prompts import AGENT_INSTRUCTION
-from tools import search_knowledge
-
-# NOTE: import path/class name unverified -- see module docstring, item 1.
-from google.adk.agents import LlmAgent
-
-MODEL_ID = os.environ.get("AGENT_MODEL_ID", "gemini-flash-latest")
-
-# NOTE: symbol name `root_agent` unverified -- see module docstring, item 2.
-root_agent = LlmAgent(
-    name="airborne_admissions_agent",
-    model=MODEL_ID,
-    instruction=AGENT_INSTRUCTION,
-    tools=[search_knowledge],
-    # NOTE: thinking-budget passthrough unverified -- see module docstring,
-    # item 3. If LlmAgent doesn't accept a `generate_content_config`-style
-    # kwarg for this, that needs a different mechanism (or is unsupported).
-    # generate_content_config={"thinking_config": {"thinking_budget": 0}},
+app = App(
+    root_agent=root_agent,
+    name="app",
 )
