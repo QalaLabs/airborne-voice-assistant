@@ -65,9 +65,9 @@ def get_pruned_context(history: list, window_size: int = 6) -> list:
     return history[-window_size:]
 
 SYSTEM_PROMPT = """
-You are Piyush, the admission counsellor at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+You are Piyush, admission counsellor at Airborne Aviation Academy by Captain Navrang, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
 Captain Navrang Singh is our Chief Pilot Instructor & Head of Training who personally conducts the DGCA ground classes and simulator sessions.
-You speak with authentic authority, helpful counseling warmth, and genuine mentorship.
+You speak with authentic authority, helpful counseling warmth, and genuine mentorship representing Airborne Aviation by Captain Navrang.
 
 CORE ROLE & OBJECTIVE:
 - Your primary objective is to be an ADVISOR, HELPFUL COUNSELOR, and INFORMATIVE GUIDE for students and parents.
@@ -224,7 +224,7 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
         ai_response = chat_with_gpt(caller_input, pruned_history, dynamic_system_prompt)
 
     if not ai_response:
-        ai_response = "Hello! I am Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. How can I assist you with your pilot training or aviation query today?"
+        ai_response = "Hello! I am Piyush, admission counsellor from Airborne Aviation by Captain Navrang, Dwarka. How can I assist you with your pilot training or aviation query today?"
 
     ai_response = ai_response.replace("₹", "Rs. ")
     t_llm = time.time() - t_llm_start

@@ -264,14 +264,14 @@ class PreCallManager:
 
         if direction == "inbound":
             if name:
-                return f"Hello {name}! Thank you for calling Airborne Aviation Academy, Dwarka. Piyush, the admission counsellor here. How may I help you today?"
-            return "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Piyush, the admission counsellor. May I know your good name, and which course or query are you calling about today?"
+                return f"Hello {name}! Thank you for calling Airborne Aviation by Captain Navrang, Dwarka. Piyush here, how may I help you today?"
+            return "Hello! Thank you for calling Airborne Aviation by Captain Navrang in Dwarka. I am Piyush, admission counsellor. May I know your good name, and which course or query are you calling about today?"
 
         # Outbound call
         if "cabin" in course.lower():
             if name:
-                return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
-            return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
+                return f"Hi {name}! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
+            return "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
         
         is_holding_cpl = False
         if dossier.prior_aviation_exp:
@@ -282,18 +282,18 @@ class PreCallManager:
 
         if is_holding_cpl or "type rating" in course.lower() or "a320" in course.lower():
             if name:
-                return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
-            return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
+                return f"Hi {name}! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
+            return "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
 
         if "interview" in course.lower() or "airline prep" in course.lower():
             if name:
-                return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
-            return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
+                return f"Hi {name}! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
+            return "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
 
         # Standard Pilot Training / CPL inquiry
         if name:
-            return f"Hi {name}! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {course}. How can I guide your pilot training journey today?"
-        return "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training. How can I guide your aviation journey today?"
+            return f"Hi {name}! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about {course}. How can I guide your pilot training journey today?"
+        return "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about pilot training. How can I guide your aviation journey today?"
 
     def compile_system_prompt(self, dossier: Optional[PreCallDossier], direction: str = "outbound") -> str:
         """
@@ -301,9 +301,9 @@ class PreCallManager:
         the system instructions so the LLM requires ZERO mid-call RAG lookups.
         """
         base_prompt = """
-You are Piyush, the admission counsellor at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
-Captain Navrang Singh is our Chief Pilot Instructor & Head of Training who leads the DGCA ground classes and simulator training.
-You are on a live call. Your primary mission is to be an ADVISOR, HELPFUL COUNSELOR, and INFORMATIVE GUIDE for aspiring pilots, students, and parents.
+You are Piyush, admission counsellor at Airborne Aviation Academy by Captain Navrang, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+Captain Navrang Singh is our Chief Pilot Instructor & Head of Training who personally conducts the DGCA ground classes and simulator training.
+You are on a live call representing Airborne Aviation by Captain Navrang. Your primary mission is to be an ADVISOR, HELPFUL COUNSELOR, and INFORMATIVE GUIDE for aspiring pilots, students, and parents.
 
 CORE CONVERSATIONAL PRINCIPLES:
 1. Answer the Specific Question First (No Rigid Script Recitation):

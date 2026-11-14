@@ -526,10 +526,10 @@ async def answer_call(
     
     if direction == "inbound":
         if dossier and dossier.name not in ["Candidate", "Future Pilot", "Inbound Caller", "New Lead"]:
-            greeting_text = f"Hello {dossier.name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+            greeting_text = f"Hello {dossier.name}! Thank you for calling Airborne Aviation by Captain Navrang, Dwarka. Piyush here. How may I help you today?"
             greeting_url = precall_manager.manager.get_prewarmed_audio_url(caller_phone) or precall_manager.INBOUND_DEFAULT_GREETING_URL
         else:
-            greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+            greeting_text = "Hello! Thank you for calling Airborne Aviation by Captain Navrang in Dwarka. I am Piyush, admission counsellor. May I know your good name, and which course or query are you calling about today?"
             greeting_url = precall_manager.INBOUND_DEFAULT_GREETING_URL
 
         # Save lead and history non-blockingly
@@ -687,10 +687,10 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
 
         if direction == "inbound":
             if dossier and dossier.name not in ["Candidate", "Future Pilot", "Inbound Caller", "TeleCMI Inbound Lead", "New Lead"]:
-                greeting_text = f"Hello {dossier.name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here. How may I help you today?"
+                greeting_text = f"Hello {dossier.name}! Thank you for calling Airborne Aviation by Captain Navrang, Dwarka. Piyush here. How may I help you today?"
                 greeting_url = precall_manager.manager.get_prewarmed_audio_url(caller_phone) or precall_manager.INBOUND_DEFAULT_GREETING_URL
             else:
-                greeting_text = "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+                greeting_text = "Hello! Thank you for calling Airborne Aviation by Captain Navrang in Dwarka. I am Piyush, admission counsellor. May I know your good name, and which course or query are you calling about today?"
                 greeting_url = precall_manager.INBOUND_DEFAULT_GREETING_URL
 
             # Non-blocking background CRM synchronization

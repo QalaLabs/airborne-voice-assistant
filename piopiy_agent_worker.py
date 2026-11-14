@@ -189,7 +189,15 @@ class FastStreamingElevenLabsTTS(TTSService):
         try:
             url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_{self._sample_rate}&optimize_streaming_latency=4"
             headers = {"xi-api-key": self._api_key, "Content-Type": "application/json", "Accept": "audio/pcm"}
-            payload = {"text": clean_text, "model_id": self._model_id}
+            payload = {
+                "text": clean_text,
+                "model_id": self._model_id,
+                "voice_settings": {
+                    "stability": 0.50,
+                    "similarity_boost": 0.75,
+                    "speed": 1.0
+                }
+            }
             chunks = []
             client = self._get_client()
             async with client.stream("POST", url, headers=headers, json=payload) as resp:
@@ -209,12 +217,12 @@ class FastStreamingElevenLabsTTS(TTSService):
         clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
         if not clean_text:
             return
-        logger.info(f"🎙️ Piyush, the admission counsellor Speaking (ElevenLabs): '{clean_text}'")
+        logger.info(f"🎙️ Piyush, admission counsellor Speaking (ElevenLabs): '{clean_text}'")
         def _boost_pcm(chunk_bytes):
             try:
                 import numpy as np
                 samples = np.frombuffer(chunk_bytes[: len(chunk_bytes) // 2 * 2], dtype=np.int16)
-                return np.clip(samples.astype(np.int32) * 1.45, -32768, 32767).astype(np.int16).tobytes()
+                return np.clip(samples.astype(np.int32) * 1.15, -32768, 32767).astype(np.int16).tobytes()
             except Exception:
                 return chunk_bytes
 
@@ -237,9 +245,9 @@ class FastStreamingElevenLabsTTS(TTSService):
                     "text": clean_text,
                     "model_id": self._model_id,
                     "voice_settings": {
-                        "stability": 0.55,
-                        "similarity_boost": 0.80,
-                        "speed": 0.95
+                        "stability": 0.50,
+                        "similarity_boost": 0.75,
+                        "speed": 1.0
                     }
                 }
                 client = self._get_client()
@@ -316,8 +324,9 @@ if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
 # 2. Compact Core Knowledge Base & Conversational Instructions
 # -------------------------------------------------------------
 SYSTEM_INSTRUCTIONS = """
-You are Captain Navrang, Chief Pilot Instructor & Head of Training at Airborne Aviation Academy, Ramphal Chowk, Sector 7, Dwarka, New Delhi.
-You are on a live call. Your primary mission is to be an ADVISOR, MENTOR, and INFORMATIVE GUIDE for aspiring pilots and aviation candidates.
+You are Piyush, admission counsellor at Airborne Aviation Academy by Captain Navrang, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+Captain Navrang Singh is our Chief Pilot Instructor & Head of Training who personally leads the DGCA ground classes and simulator training.
+You are on a live call representing Airborne Aviation by Captain Navrang. Your primary mission is to be an ADVISOR, HELPFUL COUNSELLOR, and INFORMATIVE GUIDE for aspiring pilots and aviation candidates.
 
 CORE CONVERSATIONAL PRINCIPLES:
 1. Guidance First (Not Pushy):
@@ -347,7 +356,7 @@ CORE CONVERSATIONAL PRINCIPLES:
 7. Campus Location: Ramphal Chowk, Sector 7, Dwarka, New Delhi.
 """
 
-GREETING_MESSAGE = "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. How may I guide your pilot training journey today?"
+GREETING_MESSAGE = "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. How may I guide your pilot training journey today?"
 
 shared_stt = None
 shared_vad = None
@@ -822,9 +831,9 @@ async def prewarm_services():
     if global_eleven_tts:
         greetings_to_cache = [
             GREETING_MESSAGE,
-            "Hi Deepak! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
-            "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
-            "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Piyush, the admission counsellor. May I know your good name, and which course or query are you calling about today?"
+            "Hi Deepak! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
+            "Hello! This is Piyush from Airborne Aviation by Captain Navrang in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
+            "Hello! Thank you for calling Airborne Aviation by Captain Navrang in Dwarka. I am Piyush, admission counsellor. May I know your good name, and which course or query are you calling about today?"
         ]
         for g in greetings_to_cache:
             try:
