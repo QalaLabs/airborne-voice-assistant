@@ -143,15 +143,14 @@ class FastEdgeTTSService(TTSService):
                 pcm_bytes = decoded.samples.tobytes()
                 chunk_size = self._sample_rate // 25 * 2  # ~40ms chunks of 16-bit mono PCM
                 for i in range(0, len(pcm_bytes), chunk_size):
-                    if hasattr(self, "_processing_text") and not self._processing_text:
-                        logger.info("EdgeTTS playback cancelled by user interruption.")
-                        break
                     piece = pcm_bytes[i:i + chunk_size]
                     yield TTSAudioRawFrame(piece, self._sample_rate, 1)
         except Exception as e:
             logger.error(f"TTS Synthesis error: {e}")
         yield TTSStoppedFrame()
         yield BotStoppedSpeakingFrame()
+
+_GLOBAL_CACHED_PCM = {}
 
 class FastStreamingElevenLabsTTS(TTSService):
     """
@@ -167,7 +166,7 @@ class FastStreamingElevenLabsTTS(TTSService):
         self._model_id = getattr(config, "ELEVENLABS_MODEL_ID", "eleven_flash_v2_5") or "eleven_flash_v2_5"
         self._client = None
         self._loop = None
-        self._cached_pcm = {}
+        self._cached_pcm = _GLOBAL_CACHED_PCM
 
     def _get_client(self):
         import httpx
@@ -233,9 +232,6 @@ class FastStreamingElevenLabsTTS(TTSService):
             if clean_text in self._cached_pcm:
                 logger.info(f"⚡ Serving pre-cached 0ms audio for: '{clean_text[:40]}...'")
                 for chunk in self._cached_pcm[clean_text]:
-                    if hasattr(self, "_processing_text") and not self._processing_text:
-                        logger.info("ElevenLabs cached playback cancelled by user interruption.")
-                        break
                     yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
             else:
                 # 2. Sub-second dynamic streaming reusing persistent keep-alive client with latency level 4
@@ -254,9 +250,6 @@ class FastStreamingElevenLabsTTS(TTSService):
                 async with client.stream("POST", url, headers=headers, json=payload) as resp:
                     if resp.status_code == 200:
                         async for chunk in resp.aiter_bytes(chunk_size=960):
-                            if hasattr(self, "_processing_text") and not self._processing_text:
-                                logger.info("ElevenLabs streaming cancelled by user interruption.")
-                                break
                             yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
                     else:
                         logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
@@ -378,103 +371,69 @@ CORE CONVERSATIONAL PRINCIPLES:
 
 GREETING_MESSAGE = "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. How may I guide your pilot training journey today?"
 
-shared_stt = None
-shared_vad = None
+shared_whisper_model = None
+
+PHONETIC_REPLACEMENTS = {
+    "mad and tensed": "Maths and Physics",
+    "maths and tensed": "Maths and Physics",
+    "math and tensed": "Maths and Physics",
+    "murdered industry": "10+2 schooling",
+    "modern industry": "10+2 schooling",
+    "murdered": "10+2",
+    "tenth plus two": "10+2",
+    "ten plus two": "10+2",
+    "10 plus 2": "10+2",
+    "cpl licence": "Commercial Pilot License (CPL)",
+    "cpl license": "Commercial Pilot License (CPL)",
+    "type rated": "A320 Type Rating",
+    "type rating": "A320 Type Rating",
+}
+
+class SharedModelWhisperSTTService(WhisperSTTService if WhisperSTTService is not None else object):
+    """
+    STT FrameProcessor instantiated freshly per call, reusing shared Faster-Whisper
+    model weights in memory to avoid cancellation bugs and redundant memory footprint.
+    """
+    def _load(self):
+        global shared_whisper_model
+        if shared_whisper_model is not None:
+            self._model = shared_whisper_model
+        else:
+            super()._load()
+            shared_whisper_model = self._model
 
 def init_audio_stack():
-    global shared_stt, shared_vad
-    if shared_stt is not None and shared_vad is not None:
+    global shared_whisper_model
+    if shared_whisper_model is not None:
         return
 
-    if WhisperSTTService and SileroVADAnalyzer:
+    if WhisperSTTService:
         print("==================================================================")
         print(f"Initializing Ultra-Low-Latency Airborne Voice Worker for Agent ID: {AGENT_ID}")
-        print("Configuring Whisper STT & Silero VAD...")
+        print("Pre-loading Faster-Whisper Model in memory...")
 
         try:
-            shared_stt = WhisperSTTService(
-                model=getattr(Model, "BASE", "base") if Model else "base",
+            from faster_whisper import WhisperModel
+            import functools
+            shared_whisper_model = WhisperModel(
+                "base",
                 device="cpu",
                 compute_type="int8",
-                language=getattr(Language, "EN", "en") if Language else "en"
+                cpu_threads=4,
+                num_workers=2
             )
-        except Exception as se:
-            logger.error(f"Error initializing WhisperSTTService: {se}")
-
-        if shared_stt:
-            # Re-initialize Faster-Whisper with 4 CPU threads and 2 workers for fast inference
-            try:
-                from faster_whisper import WhisperModel
-                shared_stt._model = WhisperModel(
-                    "base",
-                    device="cpu",
-                    compute_type="int8",
-                    cpu_threads=4,
-                    num_workers=2
-                )
-            except Exception as me:
-                logger.warning(f"Could not re-initialize whisper with 4 threads: {me}")
-
-            # Greedy single-pass decoding without heavy prompt overhead for snappy turnaround
-            try:
-                import functools
-                if hasattr(shared_stt, "_model") and hasattr(shared_stt._model, "transcribe"):
-                    shared_stt._model.transcribe = functools.partial(
-                        shared_stt._model.transcribe,
-                        language="en",
-                        beam_size=1,
-                        best_of=1,
-                        temperature=0.0,
-                        condition_on_previous_text=False,
-                        initial_prompt="Airborne Aviation, CPL, DGCA."
-                    )
-            except Exception as e:
-                logger.warning(f"Could not wrap whisper transcribe: {e}")
-
-            # Domain-specific phonetic normalization to fix telephony acoustic distortions
-            PHONETIC_REPLACEMENTS = {
-                "mad and tensed": "Maths and Physics",
-                "maths and tensed": "Maths and Physics",
-                "math and tensed": "Maths and Physics",
-                "murdered industry": "10+2 schooling",
-                "modern industry": "10+2 schooling",
-                "murdered": "10+2",
-                "tenth plus two": "10+2",
-                "ten plus two": "10+2",
-                "10 plus 2": "10+2",
-                "cpl licence": "Commercial Pilot License (CPL)",
-                "cpl license": "Commercial Pilot License (CPL)",
-                "type rated": "A320 Type Rating",
-                "type rating": "A320 Type Rating",
-            }
-
-            orig_handle_transcription = getattr(shared_stt, "_handle_transcription", None)
-            if orig_handle_transcription:
-                async def logged_handle_transcription(text, is_final, language):
-                    if text and text.strip():
-                        normalized_text = text.strip()
-                        lower_t = normalized_text.lower()
-                        for k, v in PHONETIC_REPLACEMENTS.items():
-                            if k in lower_t:
-                                import re
-                                normalized_text = re.sub(re.escape(k), v, normalized_text, flags=re.IGNORECASE)
-                        logger.info(f"🗣️ Caller Said: '{normalized_text}' (raw: '{text.strip()}')")
-                        return await orig_handle_transcription(normalized_text, is_final, language)
-                    return await orig_handle_transcription(text, is_final, language)
-                shared_stt._handle_transcription = logged_handle_transcription
-
-        # Low-Network & Sub-Second Latency Interruption-tuned VAD
-        try:
-            vad_params = VADParams(
-                start_secs=0.10,
-                stop_secs=0.38,
-                confidence=0.60,
-                min_volume=0.30
-            ) if VADParams else None
-            shared_vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
-            print("Whisper STT (BASE, 4 threads, greedy) & Silero VAD (tuned for low-network & barge-in) armed!")
-        except Exception as ve:
-            logger.error(f"Error initializing SileroVADAnalyzer: {ve}")
+            shared_whisper_model.transcribe = functools.partial(
+                shared_whisper_model.transcribe,
+                language="en",
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                initial_prompt="Airborne Aviation, CPL, DGCA."
+            )
+            print("Faster-Whisper (BASE, 4 threads, greedy) armed in memory!")
+        except Exception as me:
+            logger.warning(f"Could not initialize shared whisper model: {me}")
 
 MAX_CACHED_GREETINGS = 40
 
@@ -701,8 +660,40 @@ async def create_session(
         params=llm_params,
     )
 
+    # 1. Fresh STT FrameProcessor reusing shared in-memory Faster-Whisper model weights
+    stt = SharedModelWhisperSTTService(
+        model=getattr(Model, "BASE", "base") if Model else "base",
+        device="cpu",
+        compute_type="int8",
+        language=getattr(Language, "EN", "en") if Language else "en"
+    )
+    orig_handle_transcription = getattr(stt, "_handle_transcription", None)
+    if orig_handle_transcription:
+        async def logged_handle_transcription(text, is_final, language):
+            if text and text.strip():
+                normalized_text = text.strip()
+                lower_t = normalized_text.lower()
+                for k, v in PHONETIC_REPLACEMENTS.items():
+                    if k in lower_t:
+                        import re
+                        normalized_text = re.sub(re.escape(k), v, normalized_text, flags=re.IGNORECASE)
+                logger.info(f"🗣️ Caller Said: '{normalized_text}' (raw: '{text.strip()}')")
+                return await orig_handle_transcription(normalized_text, is_final, language)
+            return await orig_handle_transcription(text, is_final, language)
+        stt._handle_transcription = logged_handle_transcription
+
+    # 2. Fresh VAD analyzer instance per call (never reused to avoid cancellation freeze)
+    vad_params = VADParams(
+        start_secs=0.10,
+        stop_secs=0.38,
+        confidence=0.60,
+        min_volume=0.30
+    ) if VADParams else None
+    vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
+
+    # 3. Fresh TTS FrameProcessor reading from shared cached PCM pool
     if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
-        tts = global_eleven_tts or ElevenLabsTTSService(
+        tts = FastStreamingElevenLabsTTS(
             api_key=config.ELEVENLABS_API_KEY,
             voice_id=config.ELEVENLABS_VOICE_ID or "gxEFOF0tk3CH8J8pUbyK",
             sample_rate=TTS_SAMPLE_RATE,
@@ -721,14 +712,14 @@ async def create_session(
         audio_in_sample_rate=16000,
         audio_out_sample_rate=TTS_SAMPLE_RATE,
         vad_enabled=True,
-        vad_analyzer=shared_vad,
+        vad_analyzer=vad,
     )
 
     await voice_agent.Action(
-        stt=shared_stt,
+        stt=stt,
         llm=llm,
         tts=tts,
-        vad=shared_vad,
+        vad=vad,
         telecmi_params=telecmi_params,
         allow_interruptions=True,
         interruption_strategy=GraceWindowInterruptionStrategy(min_words=1),
