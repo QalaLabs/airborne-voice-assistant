@@ -79,14 +79,19 @@ def _execute_pcmo_fallback(parent_request_id: str, formatted_phone: str, lead_na
     the PSTN handset directly via client.pcmo.call with an agent connect pipeline.
     """
     try:
-        app_id = (
+        agent_uuid = (
             getattr(config, "AGENT_ID", "")
             or config.TELECMI_PIOPIY_APP_ID
-            or config.TELECMI_APP_ID
+            or ""
+        )
+        pcmo_app_id = (
+            getattr(config, "TELECMI_APP_ID", "")
+            or config.TELECMI_PIOPIY_APP_ID
+            or agent_uuid
         )
         token = getattr(config, "AGENT_TOKEN", "") or config.TELECMI_TOKEN or ""
-        if not (token and app_id):
-            print("Telephony: Fallback failed: missing token or app_id.")
+        if not (token and (agent_uuid or pcmo_app_id)):
+            print("Telephony: Fallback failed: missing token, agent_uuid, or pcmo_app_id.")
             return
 
         from piopiy.voice import RestClient
@@ -112,17 +117,17 @@ def _execute_pcmo_fallback(parent_request_id: str, formatted_phone: str, lead_na
                 "endpoints": [
                     {
                         "type": "agent",
-                        "id": app_id
+                        "id": agent_uuid or pcmo_app_id
                     }
                 ]
             }
         ]
 
-        print(f"Telephony: [AUTO-RECOVERY] Dispatching direct PCMO call to {telecmi_to} (caller_id={caller_id}, agent={app_id})...")
+        print(f"Telephony: [AUTO-RECOVERY] Dispatching direct PCMO call to {telecmi_to} (caller_id={caller_id}, agent={agent_uuid}, app_id={pcmo_app_id})...")
         res = client.pcmo.call(
             caller_id=caller_id,
             to_number=telecmi_to,
-            app_id=app_id,
+            app_id=pcmo_app_id,
             pipeline=pipeline
         )
         print(f"Telephony: PioPiy PCMO fallback call dispatched: {res}")

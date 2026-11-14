@@ -77,7 +77,7 @@ AGENT_TOKEN = config.AGENT_TOKEN or os.getenv("AGENT_TOKEN", "")
 # Phone audio is narrowband; Piopiy docs recommend 16 kHz PCM to avoid heavy resampling latency.
 TTS_SAMPLE_RATE = int(os.getenv("WORKER_TTS_SAMPLE_RATE", "16000"))
 # Cellular ring-trip clicks / carrier spikes must not cancel the greeting before the caller hears it.
-BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "0.3"))
+BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "1.5"))
 
 
 class GraceWindowInterruptionStrategy(MinWordsUserTurnStartStrategy):
@@ -158,7 +158,7 @@ class FastStreamingElevenLabsTTS(TTSService):
     Ultra-low latency streaming ElevenLabs TTS using persistent HTTP keep-alive connection pool,
     optimize_streaming_latency=4, eleven_flash_v2_5 model, and in-memory PCM pre-caching for instant 0ms pickup.
     """
-    def __init__(self, api_key: str, voice_id: str = "eJTrVjiaPKqBMpMujQdM", sample_rate: int = TTS_SAMPLE_RATE, **kwargs):
+    def __init__(self, api_key: str, voice_id: str = "gxEFOF0tk3CH8J8pUbyK", sample_rate: int = TTS_SAMPLE_RATE, **kwargs):
         if TTSService is not object:
             super().__init__(sample_rate=sample_rate, **kwargs)
         self._api_key = api_key
@@ -306,7 +306,7 @@ if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
     try:
         global_eleven_tts = FastStreamingElevenLabsTTS(
             api_key=config.ELEVENLABS_API_KEY,
-            voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
+            voice_id=config.ELEVENLABS_VOICE_ID or "gxEFOF0tk3CH8J8pUbyK",
             sample_rate=TTS_SAMPLE_RATE
         )
     except Exception as e:
@@ -347,7 +347,7 @@ CORE CONVERSATIONAL PRINCIPLES:
 7. Campus Location: Ramphal Chowk, Sector 7, Dwarka, New Delhi.
 """
 
-GREETING_MESSAGE = "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. How may I guide your pilot training journey today?"
+GREETING_MESSAGE = "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. How may I guide your pilot training journey today?"
 
 shared_stt = None
 shared_vad = None
@@ -674,7 +674,7 @@ async def create_session(
     if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
         tts = global_eleven_tts or ElevenLabsTTSService(
             api_key=config.ELEVENLABS_API_KEY,
-            voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
+            voice_id=config.ELEVENLABS_VOICE_ID or "gxEFOF0tk3CH8J8pUbyK",
             sample_rate=TTS_SAMPLE_RATE,
         )
     else:
@@ -822,9 +822,9 @@ async def prewarm_services():
     if global_eleven_tts:
         greetings_to_cache = [
             GREETING_MESSAGE,
-            "Hi Deepak! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
-            "Hello! This is Captain Navrang from Airborne Aviation Academy in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
-            "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+            "Hi Deepak! This is Piyush, the admission counsellor from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
+            "Hello! This is Piyush, the admission counsellor from Airborne Aviation Academy in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
+            "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Piyush, the admission counsellor. May I know your good name, and which course or query are you calling about today?"
         ]
         for g in greetings_to_cache:
             try:

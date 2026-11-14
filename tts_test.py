@@ -42,7 +42,7 @@ def speak_and_get_url(text: str) -> str:
     # Check if ElevenLabs is configured and explicitly enabled
     use_elevenlabs = getattr(config, "USE_ELEVENLABS", False)
     api_key = (config.ELEVENLABS_API_KEY or "").strip()
-    voice_id = (config.ELEVENLABS_VOICE_ID or "").strip() or "eJTrVjiaPKqBMpMujQdM"
+    voice_id = (config.ELEVENLABS_VOICE_ID or "").strip() or "gxEFOF0tk3CH8J8pUbyK"
     if use_elevenlabs and api_key and voice_id:
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?optimize_streaming_latency=4"
         headers = {
