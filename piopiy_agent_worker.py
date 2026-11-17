@@ -128,7 +128,7 @@ class FastEdgeTTSService(TTSService):
         clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
         if not clean_text:
             return
-        logger.info(f"🤖 Piyush, the admission counsellor Speaking (EdgeTTS): '{clean_text}'")
+        logger.info(f"🤖 Captain Navrang Speaking (EdgeTTS): '{clean_text}'")
         yield BotStartedSpeakingFrame()
         yield TTSStartedFrame()
         try:
@@ -157,7 +157,7 @@ class FastStreamingElevenLabsTTS(TTSService):
     Ultra-low latency streaming ElevenLabs TTS using persistent HTTP keep-alive connection pool,
     optimize_streaming_latency=4, eleven_flash_v2_5 model, and in-memory PCM pre-caching for instant 0ms pickup.
     """
-    def __init__(self, api_key: str, voice_id: str = "gxEFOF0tk3CH8J8pUbyK", sample_rate: int = TTS_SAMPLE_RATE, **kwargs):
+    def __init__(self, api_key: str, voice_id: str = "eJTrVjiaPKqBMpMujQdM", sample_rate: int = TTS_SAMPLE_RATE, **kwargs):
         if TTSService is not object:
             super().__init__(sample_rate=sample_rate, **kwargs)
         self._api_key = api_key
@@ -216,7 +216,7 @@ class FastStreamingElevenLabsTTS(TTSService):
         clean_text = text.replace("*", "").replace("#", "").replace("_", "").replace("`", "").strip()
         if not clean_text:
             return
-        logger.info(f"🎙️ Piyush, admission counsellor Speaking (ElevenLabs): '{clean_text}'")
+        logger.info(f"🎙️ Captain Navrang Speaking (ElevenLabs): '{clean_text}'")
         def _boost_pcm(chunk_bytes):
             try:
                 import numpy as np
@@ -307,7 +307,7 @@ if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
     try:
         global_eleven_tts = FastStreamingElevenLabsTTS(
             api_key=config.ELEVENLABS_API_KEY,
-            voice_id=config.ELEVENLABS_VOICE_ID or "gxEFOF0tk3CH8J8pUbyK",
+            voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
             sample_rate=TTS_SAMPLE_RATE
         )
     except Exception as e:
@@ -317,9 +317,8 @@ if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
 # 2. Compact Core Knowledge Base & Conversational Instructions
 # -------------------------------------------------------------
 SYSTEM_INSTRUCTIONS = """
-You are Piyush, senior admission counsellor and aviation mentor at Airborne Aviation Academy by Captain Navrang, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
-Captain Navrang Singh is our Chief Pilot Instructor & Head of Training who personally mentors aspiring pilots.
-You are on a live call representing Airborne Aviation by Captain Navrang.
+You are Captain Navrang, Chief Pilot Instructor, Head of Training, and aviation mentor at Airborne Aviation Academy, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+You are on a live call personally guiding aspiring pilots, students, and parents.
 
 YOUR PRIMARY MISSION:
 - You are an EXPERT AVIATION MENTOR and PATIENT COUNSELOR.
@@ -369,7 +368,7 @@ CORE CONVERSATIONAL PRINCIPLES:
    - IRRELEVANT / HESITANT INTERRUPTION (they say 'Wait', 'Hold on', cough, stray background noise, or lose focus): Do NOT get confused or repeat previous words verbatim. Politely anchor ("Sure, take your time,", "Theek hai,") and RECONSTRUCT the discussion: restate the single core question or fact simply to move the guidance forward.
 """
 
-GREETING_MESSAGE = "Hello! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. How may I guide your pilot training journey today?"
+GREETING_MESSAGE = "Hi! This is Captain Navrang from Airborne Aviation Academy, Dwarka. How may I guide your pilot training journey today?"
 
 shared_whisper_model = None
 
@@ -695,7 +694,7 @@ async def create_session(
     if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
         tts = FastStreamingElevenLabsTTS(
             api_key=config.ELEVENLABS_API_KEY,
-            voice_id=config.ELEVENLABS_VOICE_ID or "gxEFOF0tk3CH8J8pUbyK",
+            voice_id=config.ELEVENLABS_VOICE_ID or "eJTrVjiaPKqBMpMujQdM",
             sample_rate=TTS_SAMPLE_RATE,
         )
     else:
@@ -853,9 +852,9 @@ async def prewarm_services():
     if global_eleven_tts:
         greetings_to_cache = [
             GREETING_MESSAGE,
-            "Hi Deepak! This is Piyush from Airborne Aviation by Captain Navrang, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
-            "Hello! This is Piyush from Airborne Aviation by Captain Navrang in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
-            "Hello! Thank you for calling Airborne Aviation by Captain Navrang in Dwarka. I am Piyush, admission counsellor. May I know your good name, and which course or query are you calling about today?"
+            "Hi Deepak! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
+            "Hello! This is Captain Navrang from Airborne Aviation Academy in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
+            "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
         ]
         for g in greetings_to_cache:
             try:

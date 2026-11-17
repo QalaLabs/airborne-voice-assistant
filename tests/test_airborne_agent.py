@@ -12,9 +12,8 @@ from agent.prompts import AGENT_INSTRUCTION
 
 
 def test_agent_instruction_persona() -> None:
-    """Verify that agent instruction is properly configured with Piyush and Capt. Navrang Singh."""
-    assert "Piyush" in AGENT_INSTRUCTION
-    assert "Captain Navrang Singh" in AGENT_INSTRUCTION
+    """Verify that agent instruction is properly configured with Captain Navrang."""
+    assert "Captain Navrang" in AGENT_INSTRUCTION
     assert "Dwarka" in AGENT_INSTRUCTION
     assert "Rs. 2,70,000" in AGENT_INSTRUCTION
     assert "Rs. 55-65 Lakhs" in AGENT_INSTRUCTION
