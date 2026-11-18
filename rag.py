@@ -240,6 +240,25 @@ AIRBORNE_KNOWLEDGE_BASE = [
             "Q: Can I join ground school if I did not have Physics/Maths in Class 12?\n"
             "A: Yes. You can clear Physics and Mathematics through NIOS (National Institute of Open Schooling) on-demand exams, which is 100% recognized by DGCA."
         )
+    },
+    {
+        "id": "parents_webinar",
+        "title": "Airborne Aviation Live Parents' Webinar on Pilot Careers",
+        "keywords": ["webinar", "parents webinar", "online session", "21 nov", "webinar fee", "airborneaviation.in/webinar", "webinar link", "live webinar", "registration", "seat", "parents"],
+        "content": (
+            "Airborne Aviation Live Parents' Webinar on Pilot Careers:\n"
+            "- Official Webinar Page: https://www.airborneaviation.in/webinar (airborneaviation.in/webinar)\n"
+            "- Schedule: Saturday 21 Nov 2026, 2:00 PM IST (Live Online).\n"
+            "- Registration Fee: Nominal ₹21 fee to reserve seat (WhatsApp join link and reminders sent after confirmation).\n"
+            "- Target Audience: Parents of Class 11/12 students, college students, and aspiring pilots seeking clear, transparent career facts.\n"
+            "- Host: Captain Navrang Singh (Co-founder, airline-trained pilot & instructor – teaches Navigation & Meteorology).\n"
+            "- Duration & Structure (60 minutes total):\n"
+            "  1. Takeoff (20 mins): Capt. Navrang breaks down pilot training costs stage by stage, timeline, and post-licence career path.\n"
+            "  2. Cruise (30 mins): Live open Q&A where Capt. Navrang directly answers parents' questions on exams, medicals, job reality, and choosing an academy.\n"
+            "  3. Landing (10 mins): Next steps, stage-wise fee roadmap, counseling calls, and Dwarka campus visit slots.\n"
+            "- Core Topics Covered: Truth about pilot training costs (DGCA ground school ₹2.7L vs ₹55-65L flying hours vs type rating), 10+2 PCM and NIOS acceptance, DGCA Class 2 & 1 medical hurdles, Cadet pilot selections (IndiGo, Air India), A320 simulator demo on Dwarka campus, and an objective checklist for choosing any academy.\n"
+            "- Action for Webinar Leads: Confirm their seat reservation at airborneaviation.in/webinar (₹21 fee) and provide WhatsApp join link details."
+        )
     }
 ]
 

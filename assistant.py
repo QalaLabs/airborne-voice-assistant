@@ -30,7 +30,8 @@ AVIATION_KEYWORDS = {
     "adapt", "cabin", "crew", "flight", "attendant", "ppl", "multi-engine", "mer",
     "medical", "medicals", "class 1", "class 2", "eligibility", "maths", "physics",
     "nios", "age", "navrang", "modassir", "dwarka", "location", "address", "hostel",
-    "syllabus", "exam", "dgca"
+    "syllabus", "exam", "dgca", "webinar", "webinars", "parents webinar", "live webinar",
+    "online session", "21 nov"
 }
 
 HUMAN_TRANSFER_PHRASES = [
@@ -110,6 +111,14 @@ CONVERSATIONAL GUIDELINES:
      * Type Rating consists of Ground School + Fixed-Base Simulator (FBS) for cockpit procedures + Level-D Full Flight Simulator (FFS) for flight certification.
      * Airborne Aviation provides DGCA A320 Technical Specific classes and FBS cockpit procedure simulator training in Dwarka (only mention if caller asks where/how to prepare).
    - Cabin Crew: Eligibility is 10+2 any stream, age 18-27. Training is conducted at Dwarka campus.
+   - Live Parents' Webinar on Pilot Careers:
+     * Official Webinar Page: airborneaviation.in/webinar (https://www.airborneaviation.in/webinar)
+     * Schedule: Saturday 21 Nov 2026 at 2:00 PM IST (Live Online, 60 minutes).
+     * Host: Captain Navrang Singh (Airline-trained pilot & instructor, co-founder of Airborne Aviation Academy).
+     * Registration Fee: Nominal Rs. 21 seat reservation fee. Live join link sent via WhatsApp.
+     * Agenda: 20 min presentation by Capt. Navrang + 30 min live interactive Q&A for parents + 10 min next steps.
+     * Core Topics: Stage-wise pilot training cost breakdown (DGCA ground school Rs. 2.7L vs Rs. 55-65L flying vs type rating), 10+2 PCM eligibility and NIOS acceptance, DGCA medical hurdles (Class 2 and Class 1), cadet pilot programs, job reality after CPL, and checklist for choosing an academy.
+     * Directive for Webinar Leads: When speaking to a webinar lead or someone inquiring about the webinar, confirm their registration, warmly invite them to attend with their parents, and guide them to airborneaviation.in/webinar to reserve their seat for Rs. 21.
    - Location: Ramphal Chowk, Sector 7, Dwarka, New Delhi (near Dwarka Sector 9 metro). Verified student PGs and hostels available nearby.
 7. Currency Pronunciation: Always say 'Rupees' or 'Lakhs'.
 8. Interruption Handling & Reconstruct Rule:
@@ -337,13 +346,14 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
            - Private Pilot License (PPL) Ground Classes
            - Flight Dispatcher Training
            - Multi-Engine Rating (MER) Ground School
+           - Parents' Webinar: Pilot Career (airborneaviation.in/webinar)
            Or 'Flight Training' / 'Unknown'
         4. user_query: Brief summary of the caller's primary question, doubt, or reason for calling.
         5. is_18_above: true / false / 'Unknown' (based on age question).
         6. city_or_location: City, area, or locality where the caller stays (e.g. 'Dwarka', 'Delhi', 'Gurgaon', 'Janakpuri').
         7. confirmed_education_institute: true if confirmed aware that Airborne is a training academy and not a job agency, else false/null.
         8. open_to_ramphal_chowk: true if willing to attend classes or simulator sessions at Ramphal Chowk, Dwarka campus, else false/null.
-        9. booking_intent: 'Campus Visit at Ramphal Chowk' / 'Counselling Call' / 'None'.
+        9. booking_intent: 'Parents Webinar Registration' / 'Campus Visit at Ramphal Chowk' / 'Counselling Call' / 'None'.
         10. scheduled_time: Preferred date/time (e.g. 'Tomorrow 3 PM', 'Saturday 11 AM') if a visit or call was agreed, else null.
         11. classification: 'Hot' (if booked a campus visit / counselling call, or verified 18+ and confirmed interest) / 'Warm' (interested, checking options) / 'Cold' (wrong number, disqualified, no interest).
         12. callback_requested: true if caller asked to be called back later, else false.

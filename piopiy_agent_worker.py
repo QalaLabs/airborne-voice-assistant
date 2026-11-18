@@ -41,10 +41,11 @@ try:
     from piopiy.audio.vad.silero import SileroVADAnalyzer
     from piopiy.audio.vad.vad_analyzer import VADParams
     from piopiy.transcriptions.language import Language
-    from piopiy.turns.user_start.min_words_user_turn_start_strategy import MinWordsUserTurnStartStrategy
+    from piopiy.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
     from piopiy.frames.frames import (
         BotStartedSpeakingFrame,
         BotStoppedSpeakingFrame,
+        VADUserStartedSpeakingFrame,
         TTSAudioRawFrame,
         TTSStartedFrame,
         TTSStoppedFrame,
@@ -61,9 +62,10 @@ except ImportError:
     SileroVADAnalyzer = None
     VADParams = None
     Language = None
-    MinWordsUserTurnStartStrategy = object
+    VADUserTurnStartStrategy = object
     BotStartedSpeakingFrame = object
     BotStoppedSpeakingFrame = object
+    VADUserStartedSpeakingFrame = object
     TTSAudioRawFrame = object
     TTSStartedFrame = object
     TTSStoppedFrame = object
@@ -77,38 +79,45 @@ AGENT_TOKEN = config.AGENT_TOKEN or os.getenv("AGENT_TOKEN", "")
 # Phone audio is narrowband; Piopiy docs recommend 16 kHz PCM to avoid heavy resampling latency.
 TTS_SAMPLE_RATE = int(os.getenv("WORKER_TTS_SAMPLE_RATE", "16000"))
 # Cellular ring-trip clicks / carrier spikes must not cancel the greeting before the caller hears it.
-BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "0.5"))
+BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "0.8"))
 
 
-class GraceWindowInterruptionStrategy(MinWordsUserTurnStartStrategy):
-    """Min-words barge-in that ignores interruptions during the first seconds of the opening greeting."""
+class GraceWindowInterruptionStrategy(VADUserTurnStartStrategy):
+    """VAD-based barge-in that pauses and cancels bot speech immediately when the user speaks,
+    while ignoring initial connection clicks during the first moments of the opening greeting."""
 
     def __init__(self, *, grace_secs: float = BARGE_IN_GRACE_SECS, **kwargs):
         super().__init__(**kwargs)
         self._grace_secs = grace_secs
         self._first_speech_at = None
         self._first_speech_done = False
+        self._bot_speaking = False
 
-    async def _handle_bot_started_speaking(self, frame):
-        if self._first_speech_at is None:
-            self._first_speech_at = time.monotonic()
-        await super()._handle_bot_started_speaking(frame)
+    async def reset(self):
+        await super().reset()
+        self._bot_speaking = False
 
-    async def _handle_bot_stopped_speaking(self, frame):
-        self._first_speech_done = True
-        await super()._handle_bot_stopped_speaking(frame)
+    async def process_frame(self, frame):
+        if isinstance(frame, BotStartedSpeakingFrame):
+            if self._first_speech_at is None:
+                self._first_speech_at = time.monotonic()
+            self._bot_speaking = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._first_speech_done = True
+            self._bot_speaking = False
 
-    async def trigger_user_turn_started(self):
-        in_grace = (
-            self._bot_speaking
-            and not self._first_speech_done
-            and self._first_speech_at is not None
-            and time.monotonic() - self._first_speech_at < self._grace_secs
-        )
-        if in_grace:
-            self._text = ""
-            return
-        await super().trigger_user_turn_started()
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            in_grace = (
+                self._bot_speaking
+                and not self._first_speech_done
+                and self._first_speech_at is not None
+                and (time.monotonic() - self._first_speech_at < self._grace_secs)
+            )
+            if in_grace:
+                return
+            await self.trigger_user_turn_started()
+        else:
+            await super().process_frame(frame)
 
 # -------------------------------------------------------------
 # 1. Ultra-Fast Incremental Streaming Neural TTS (rate=+15%, chunk streaming)
@@ -186,7 +195,7 @@ class FastStreamingElevenLabsTTS(TTSService):
         if not clean_text or clean_text in self._cached_pcm:
             return
         try:
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_{self._sample_rate}&optimize_streaming_latency=4"
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_{self._sample_rate}&optimize_streaming_latency=2"
             headers = {"xi-api-key": self._api_key, "Content-Type": "application/json", "Accept": "audio/pcm"}
             payload = {
                 "text": clean_text,
@@ -221,7 +230,7 @@ class FastStreamingElevenLabsTTS(TTSService):
             try:
                 import numpy as np
                 samples = np.frombuffer(chunk_bytes[: len(chunk_bytes) // 2 * 2], dtype=np.int16)
-                return np.clip(samples.astype(np.int32) * 1.15, -32768, 32767).astype(np.int16).tobytes()
+                return np.clip(samples.astype(np.int32) * 1.0, -32768, 32767).astype(np.int16).tobytes()
             except Exception:
                 return chunk_bytes
 
@@ -234,8 +243,8 @@ class FastStreamingElevenLabsTTS(TTSService):
                 for chunk in self._cached_pcm[clean_text]:
                     yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
             else:
-                # 2. Sub-second dynamic streaming reusing persistent keep-alive client with latency level 4
-                url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_{self._sample_rate}&optimize_streaming_latency=4"
+                # 2. Sub-second dynamic streaming reusing persistent keep-alive client with high-fidelity latency level 2
+                url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream?output_format=pcm_{self._sample_rate}&optimize_streaming_latency=2"
                 headers = {"xi-api-key": self._api_key, "Content-Type": "application/json", "Accept": "audio/pcm"}
                 payload = {
                     "text": clean_text,
@@ -252,7 +261,20 @@ class FastStreamingElevenLabsTTS(TTSService):
                         async for chunk in resp.aiter_bytes(chunk_size=960):
                             yield TTSAudioRawFrame(_boost_pcm(chunk), self._sample_rate, 1)
                     else:
-                        logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}")
+                        logger.error(f"ElevenLabs TTS returned HTTP {resp.status_code}. Executing EdgeTTS fallback...")
+                        if edge_tts and miniaudio:
+                            comm = edge_tts.Communicate(clean_text, getattr(config, "TTS_VOICE", "en-IN-PrabhatNeural"), rate="+0%")
+                            chunks = []
+                            async for chunk in comm.stream():
+                                if chunk["type"] == "audio":
+                                    chunks.append(chunk["data"])
+                            mp3_data = b"".join(chunks)
+                            if mp3_data:
+                                decoded = miniaudio.decode(mp3_data, nchannels=1, sample_rate=self._sample_rate)
+                                pcm_bytes = decoded.samples.tobytes()
+                                chunk_size = self._sample_rate // 25 * 2
+                                for i in range(0, len(pcm_bytes), chunk_size):
+                                    yield TTSAudioRawFrame(pcm_bytes[i:i + chunk_size], self._sample_rate, 1)
         except asyncio.CancelledError:
             logger.info("TTS cleanly cancelled by caller interruption.")
         except Exception as e:
@@ -646,6 +668,8 @@ async def create_session(
         greeting=session_greeting,
         idle_timeout_secs=90,
     )
+    if session_greeting and hasattr(voice_agent, "_messages") and isinstance(voice_agent._messages, list):
+        voice_agent._messages.append({"role": "assistant", "content": session_greeting})
 
     llm_params = GoogleLLMService.InputParams(
         thinking=GoogleLLMService.ThinkingConfig(thinking_budget=0),
@@ -682,11 +706,12 @@ async def create_session(
         stt._handle_transcription = logged_handle_transcription
 
     # 2. Fresh VAD analyzer instance per call (never reused to avoid cancellation freeze)
+    # Tuned to prevent listening to soft voices / whispers and allow natural caller pausing without cutoff
     vad_params = VADParams(
-        start_secs=0.10,
-        stop_secs=0.38,
-        confidence=0.60,
-        min_volume=0.30
+        start_secs=0.20,
+        stop_secs=0.80,
+        confidence=0.70,
+        min_volume=0.60
     ) if VADParams else None
     vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
 
@@ -721,7 +746,7 @@ async def create_session(
         vad=vad,
         telecmi_params=telecmi_params,
         allow_interruptions=True,
-        interruption_strategy=GraceWindowInterruptionStrategy(min_words=1),
+        interruption_strategy=GraceWindowInterruptionStrategy(grace_secs=0.8),
     )
 
     logger.info("VoiceAgent pipeline active. Tuned 500ms turn latency & real-time interruption pause armed!")
