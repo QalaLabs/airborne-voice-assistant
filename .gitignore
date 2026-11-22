@@ -93,3 +93,9 @@ venv.bak/
 
 # Generated Audio Files
 static/*.mp3
+
+# Databases & local data
+*.db
+*.sqlite
+*.sqlite3
+data/

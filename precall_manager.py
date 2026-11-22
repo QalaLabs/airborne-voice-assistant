@@ -327,7 +327,13 @@ class PreCallManager:
             return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
 
         # Standard Pilot Training / CPL inquiry
-        clean_course = course if course and not any(bad in course_l for bad in ["not sure", "unknown", "none"]) else "pilot training"
+        is_generic = not course or any(bad in course_l for bad in ["not sure", "unknown", "none", "general", "null"])
+        if is_generic:
+            if name:
+                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training and aviation career options. How can I guide your journey today?"
+            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training and aviation career options. How can I guide your journey today?"
+
+        clean_course = course.strip()
         if name:
             return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {clean_course}. How can I guide your pilot training journey today?"
         return f"Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {clean_course}. How can I guide your aviation journey today?"
@@ -345,8 +351,9 @@ CORE THOUGHT-LEADER INVARIANTS:
 1. Absolute Regulatory Accuracy: You cannot say anything factually wrong. Anchored 100% in DGCA regulations, Schedule II, and verified module facts.
 2. Never Over-Explain — Hit the Exact Right Point: Never ramble or give lengthy monologues. Identify the core crux and hit the exact point in 1-2 crisp sentences.
 3. Disarm Bluffs & Trick Questions: Callers will test or try to fool you (e.g. CPL at 18, 15L CPL, skipping medicals). Politely state the exact regulatory fact, qualify their real status, and mould the conversation in Airborne's favor.
-4. Topic Quoting & Diagnostic Follow-Up: Always quote the topic in {Subject}, give a succinct explanation, and ask: "Do you face issue in {Subject} - {Topic}?".
+4. Natural Consultative Discovery: Directly address the caller's specific doubt in 1-2 clear sentences. Follow up with a natural open discovery question (such as asking their current education stream, 10+2 status, or specific aviation ambition) to keep the conversation engaging.
 5. Mirror Caller Tone: Empathize like a true human mentor, formulating your tone to match student ambition or parent concerns in English or Hinglish.
+6. Campus Visit Gating: NEVER push for a campus visit to Ramphal Chowk on early turns. Answer all eligibility, syllabus, and training questions first. Only propose an in-person meeting if the caller asks to visit or asks where we are located.
 
 YOUR PRIMARY MISSION:
 - You are an EXPERT AVIATION MENTOR and PATIENT COUNSELOR.

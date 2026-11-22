@@ -19,18 +19,53 @@ def sync_lead_with_telecrm(lead_data: dict, transcript: str = None) -> bool:
     }
     
     # Map fields to match TeleCRM custom schema exactly
+    fields = {
+        "name": lead_data.get("name", "Future Pilot"),
+        "phone": lead_data.get("phone"),
+        "email": lead_data.get("email"),
+        "Course": lead_data.get("course_interest"),
+        "Classification": lead_data.get("classification"),
+        "Status": lead_data.get("crm_status") or lead_data.get("status") or lead_data.get("classification"),
+        "Budget Status": lead_data.get("budget_status"),
+        "Timeline Urgency": lead_data.get("timeline_urgency")
+    }
+
+    if lead_data.get("lost_reason"):
+        fields["Lost Reason"] = lead_data.get("lost_reason")
+    if lead_data.get("counselor_name"):
+        fields["Assigned Counselor"] = lead_data.get("counselor_name")
+    if lead_data.get("followup_time"):
+        fields["Followup Date"] = str(lead_data.get("followup_time"))
+    if lead_data.get("meeting_time"):
+        fields["Meeting Date"] = str(lead_data.get("meeting_time"))
+
     payload = {
-        "fields": {
-            "name": lead_data.get("name", "Future Pilot"),
-            "phone": lead_data.get("phone"),
-            "email": lead_data.get("email"),
-            "Course": lead_data.get("course_interest"),
-            "Classification": lead_data.get("classification"),
-            "Budget Status": lead_data.get("budget_status"),
-            "Timeline Urgency": lead_data.get("timeline_urgency")
-        },
+        "fields": fields,
         "actions": []
     }
+
+    # Add counselor assignment action if assigned
+    if lead_data.get("counselor_name"):
+        payload["actions"].append({
+            "type": "ASSIGNMENT",
+            "text": f"Assigned Counselor: {lead_data.get('counselor_name')}. Reason: {lead_data.get('counselor_reason', 'Automated qualification assignment')}"
+        })
+
+    # Add follow-up task action if scheduled
+    if lead_data.get("followup_time"):
+        payload["actions"].append({
+            "type": "TASK",
+            "text": f"Follow-up Call: {lead_data.get('followup_notes') or 'Follow-up with candidate'}",
+            "due_date": str(lead_data.get("followup_time"))
+        })
+
+    # Add meeting action if scheduled
+    if lead_data.get("meeting_time"):
+        payload["actions"].append({
+            "type": "MEETING",
+            "text": f"Campus Visit & Simulator Session: {lead_data.get('meeting_notes') or 'Meeting at Dwarka campus'}",
+            "due_date": str(lead_data.get("meeting_time"))
+        })
     
     # Append transcript as a system note
     if transcript:

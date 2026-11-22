@@ -1,17 +1,8 @@
 import requests
 import json
 import re
-from openai import OpenAI
 import config
 import supabase_client
-
-# Initialize OpenAI Client (if key provided)
-openai_client = None
-if config.OPENAI_API_KEY:
-    try:
-        openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
-    except Exception as e:
-        print(f"Warning: Failed to initialize OpenAI client: {e}")
 
 # =====================================================================
 # 📚 AIRBORNE AVIATION GROUND-TRUTH KNOWLEDGE CORPUS (from airborneaviation.in)
@@ -344,20 +335,27 @@ def search_local_knowledge(query: str, top_k: int = 3) -> str:
         "- Campus Address: E-549, 2nd Floor, Ramphal Chowk, Sector 7, Dwarka, Delhi. Phone: +91 9953 777 320."
     )
 
-def get_embedding(text: str, model: str = "text-embedding-3-small"):
+def get_embedding(text: str, model: str = "text-embedding-004"):
     """
-    Generate vector embedding using OpenAI API (if configured).
+    Generate vector embedding using Google Gemini API (if configured).
+    Falls back gracefully to the fast in-memory TF-IDF knowledge base.
     """
-    if not openai_client:
+    gemini_key = getattr(config, "GEMINI_API_KEY", "")
+    if not gemini_key:
         return None
         
     try:
-        text = text.replace("\n", " ")
-        response = openai_client.embeddings.create(input=[text], model=model)
-        return response.data[0].embedding
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent?key={gemini_key}"
+        payload = {
+            "model": f"models/{model}",
+            "content": {"parts": [{"text": text.replace("\n", " ")}]}
+        }
+        resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("embedding", {}).get("values")
     except Exception as e:
-        print(f"Embedding API Notice: {e}")
-        return None
+        print(f"Gemini Embedding API Notice: {e}")
+    return None
 
 def query_rag(query: str, threshold: float = 0.5, limit: int = 3) -> str:
     """

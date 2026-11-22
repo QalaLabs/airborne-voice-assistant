@@ -14,21 +14,23 @@ APP_PORT = int(os.environ.get("PORT", os.environ.get("APP_PORT", 8000)))
 APP_URL = _clean_env("APP_URL", "https://airborne-voice-assistant-368523757732.asia-south1.run.app")
 NGROK_URL = _clean_env("NGROK_URL", APP_URL)
 
-# OpenAI Settings
-OPENAI_API_KEY = _clean_env("OPENAI_API_KEY", "")
-OPENAI_MODEL = _clean_env("OPENAI_MODEL", "gpt-4-turbo-preview")
-
-# Gemini Settings
+# Gemini LLM Settings (Primary Intelligence Engine)
 GEMINI_API_KEY = _clean_env("GEMINI_API_KEY", "")
 GEMINI_MODEL = _clean_env("GEMINI_MODEL", "gemini-3.8-flash")
 
-# ElevenLabs Settings
+# Text-to-Speech Settings
+# Primary: ElevenLabs
 USE_ELEVENLABS = _clean_env("USE_ELEVENLABS", "true").lower() == "true"
 ELEVENLABS_API_KEY = _clean_env("ELEVENLABS_API_KEY", "")
 ELEVENLABS_KEY_ID = _clean_env("ELEVENLABS_KEY_ID", "")
 ELEVENLABS_VOICE_ID = _clean_env("ELEVENLABS_VOICE_ID", "eJTrVjiaPKqBMpMujQdM")
 ELEVENLABS_MODEL_ID = _clean_env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 ELEVENLABS_AGENT_ID = _clean_env("ELEVENLABS_AGENT_ID", "agent_5701kztar977fxsb7nj7cxedcrgf")
+
+# Secondary: Google Cloud Text-to-Speech (Cloud Run native)
+GOOGLE_TTS_VOICE = _clean_env("GOOGLE_TTS_VOICE", "en-IN-Neural2-B")
+GOOGLE_TTS_LANG = _clean_env("GOOGLE_TTS_LANG", "en-IN")
+GOOGLE_TTS_SPEED = float(os.environ.get("GOOGLE_TTS_SPEED", "1.0"))
 
 # Twilio Credentials (fallback telephony carrier)
 TWILIO_ACCOUNT_SID = _clean_env("TWILIO_ACCOUNT_SID", "")

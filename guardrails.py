@@ -26,6 +26,31 @@ VISIT_MEETING_GUARDRAIL_RESPONSE = (
     "Should I ask them to get in touch with you?"
 )
 
+AMD_GUARDRAIL_RESPONSE = (
+    "Thank you for contacting Airborne Aviation Academy. We will connect with you shortly. Clear skies! [EXIT]"
+)
+
+AUDIBILITY_GUARDRAIL_RESPONSE = (
+    "Yes, I can hear you clearly! Can you hear me now? (Haan ji, main aapko bilkul sun sakta hoon. Kya aapko meri aawaz aa rahi hai?)"
+)
+
+# Regex patterns for Answering Machine / Carrier IVR / Voicemail
+AMD_PATTERNS = [
+    r"\b(record your message|at the tone|after the tone|after the beep|leave a message)\b",
+    r"\b(person you are trying to reach|number you are calling|subscriber is|is currently (unavailable|busy|switched off))\b",
+    r"\b(welcome to (our\s+)?(youtube|channel|telecom|airtel|jio|vi|vodafone|bsnl))\b",
+    r"\b(press [0-9]|dial [0-9]|for english press|hindi ke liye)\b",
+    r"\b(call waiting|forwarded to voicemail|customer care)\b",
+]
+
+# Regex patterns for in-call audibility check
+AUDIBILITY_PATTERNS = [
+    r"^(hello[\.\?\s,!]*)+$",
+    r"\b(aawaz nahi aa rahi|awaz nahi aa rahi|awaz nahi|sunai nahi de raha|awaz kat rahi hai)\b",
+    r"\b(can you hear me|am i audible|are you there|are you listening|hello are you there)\b",
+    r"\b(kya aap mujhe sun sakte hain|kya meri aawaz aa rahi hai)\b"
+]
+
 # Regex patterns for Identity queries
 IDENTITY_PATTERNS = [
     r"\b(are you|r u)\s+(an?\s+)?(ai|bot|robot|machine|computer|artificial|virtual|avatar)\b",
@@ -146,6 +171,52 @@ def check_visit_meeting_guardrail(caller_input: str, phone: str = "") -> Optiona
     return None
 
 
+def check_amd_guardrail(caller_input: str, phone: str = "") -> Optional[str]:
+    """
+    Evaluates whether caller is an answering machine, carrier IVR, or voicemail prompt.
+    Returns graceful exit prompt to disconnect immediately.
+    """
+    cleaned = (caller_input or "").strip().lower()
+    for pattern in AMD_PATTERNS:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            log_highlight(
+                "[GUARDRAIL TRIGGERED: AMD / CARRIER IVR DETECTED]",
+                {
+                    "Caller Phone": phone or "N/A",
+                    "Matched Pattern": pattern,
+                    "Caller Input": caller_input,
+                    "Action": "Disconnect Immediately to save billing",
+                    "Response": AMD_GUARDRAIL_RESPONSE
+                },
+                border_char="!"
+            )
+            return AMD_GUARDRAIL_RESPONSE
+    return None
+
+
+def check_audibility_guardrail(caller_input: str, phone: str = "") -> Optional[str]:
+    """
+    Evaluates whether caller is asking if they are audible or repeating 'hello'.
+    Returns instant confirmation without regenerating an entire sales pitch.
+    """
+    cleaned = (caller_input or "").strip().lower()
+    for pattern in AUDIBILITY_PATTERNS:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            log_highlight(
+                "[GUARDRAIL TRIGGERED: AUDIBILITY CHECK-IN]",
+                {
+                    "Caller Phone": phone or "N/A",
+                    "Matched Pattern": pattern,
+                    "Caller Input": caller_input,
+                    "Action": "Instant Sub-Second Audibility Acknowledgment",
+                    "Response": AUDIBILITY_GUARDRAIL_RESPONSE
+                },
+                border_char="="
+            )
+            return AUDIBILITY_GUARDRAIL_RESPONSE
+    return None
+
+
 def detect_language_adaptation(caller_input: str, phone: str = "") -> Tuple[str, str, str]:
     """
     Classifies caller's input into:
@@ -217,21 +288,35 @@ def evaluate_all_guardrails(caller_input: str, phone: str = "") -> Tuple[Optiona
     """
     meta = {}
     
-    # 1. Identity Guardrail
+    # 0. Answering Machine Detection (AMD) / Carrier IVR Check
+    amd_resp = check_amd_guardrail(caller_input, phone=phone)
+    if amd_resp:
+        meta["guardrail"] = "AMD_CARRIER_IVR"
+        meta["action"] = "IMMEDIATE_RESPONSE"
+        return amd_resp, "ENGLISH", meta
+
+    # 1. Audibility / "Can you hear me?" Check
+    audibility_resp = check_audibility_guardrail(caller_input, phone=phone)
+    if audibility_resp:
+        meta["guardrail"] = "AUDIBILITY_CHECK"
+        meta["action"] = "IMMEDIATE_RESPONSE"
+        return audibility_resp, "ENGLISH", meta
+
+    # 2. Identity Guardrail
     identity_resp = check_identity_guardrail(caller_input, phone=phone)
     if identity_resp:
         meta["guardrail"] = "IDENTITY"
         meta["action"] = "IMMEDIATE_RESPONSE"
         return identity_resp, "ENGLISH", meta
 
-    # 2. Campus Visit / Meeting Guardrail
+    # 3. Campus Visit / Meeting Guardrail
     visit_resp = check_visit_meeting_guardrail(caller_input, phone=phone)
     if visit_resp:
         meta["guardrail"] = "CAMPUS_VISIT_MEETING"
         meta["action"] = "IMMEDIATE_RESPONSE"
         return visit_resp, "ENGLISH", meta
 
-    # 3. Language Adaptation Guardrail
+    # 4. Language Adaptation Guardrail
     detected_lang, enforced_lang, directive = detect_language_adaptation(caller_input, phone=phone)
     meta["guardrail"] = "LANGUAGE_ADAPTATION"
     meta["detected_language"] = detected_lang

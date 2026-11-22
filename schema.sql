@@ -12,6 +12,19 @@ CREATE TABLE IF NOT EXISTS organizations (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Users / Counselors table for CRM assignments
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "orgId" UUID,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone VARCHAR(20),
+    role VARCHAR(50) DEFAULT 'ADMISSIONS_COUNSELOR',
+    "isActive" BOOLEAN DEFAULT true,
+    "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Leads table (supports both CRM Prisma schema and voice agent fields)
 CREATE TABLE IF NOT EXISTS leads (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -26,6 +39,8 @@ CREATE TABLE IF NOT EXISTS leads (
     status VARCHAR(50) DEFAULT 'NEW',
     classification VARCHAR(50) DEFAULT 'Cold',
     source VARCHAR(50) DEFAULT 'VOICE_AGENT',
+    "assignedTo" UUID,
+    "lostReason" VARCHAR(100),
     metadata JSONB DEFAULT '{}'::jsonb,
     "lastActivityAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     "nextFollowUp" TIMESTAMP WITH TIME ZONE,
@@ -40,10 +55,12 @@ CREATE TABLE IF NOT EXISTS lead_activities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     "leadId" UUID REFERENCES leads(id) ON DELETE SET NULL,
     "orgId" UUID,
+    "performedBy" UUID,
     "activityType" VARCHAR(50) DEFAULT 'CALL',
     title VARCHAR(255),
     notes TEXT,
     outcome VARCHAR(50),
+    "nextAction" TEXT,
     "dueAt" TIMESTAMP WITH TIME ZONE,
     "completedAt" TIMESTAMP WITH TIME ZONE,
     "durationMins" INTEGER DEFAULT 0,

@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 import config
 
@@ -164,7 +165,22 @@ def init_db():
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "lastCallSummary" TEXT;
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "telecmiConversationId" VARCHAR(255);
                     ALTER TABLE leads ADD COLUMN IF NOT EXISTS "autoCallingEnabled" BOOLEAN DEFAULT true;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "assignedTo" UUID;
+                    ALTER TABLE leads ADD COLUMN IF NOT EXISTS "lostReason" VARCHAR(100);
+                    ALTER TABLE lead_activities ADD COLUMN IF NOT EXISTS "performedBy" UUID;
+                    ALTER TABLE lead_activities ADD COLUMN IF NOT EXISTS "nextAction" TEXT;
                     ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'ACTIVE';
+                    CREATE TABLE IF NOT EXISTS users (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        "orgId" UUID,
+                        name VARCHAR(255) NOT NULL,
+                        email VARCHAR(255) NOT NULL,
+                        phone VARCHAR(20),
+                        role VARCHAR(50) DEFAULT 'ADMISSIONS_COUNSELOR',
+                        "isActive" BOOLEAN DEFAULT true,
+                        "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
                     DO $$ BEGIN ALTER TYPE "LeadSource" ADD VALUE IF NOT EXISTS 'VOICE_AGENT'; EXCEPTION WHEN undefined_object THEN NULL; END $$;
                 """
                 try:
@@ -222,7 +238,7 @@ def get_lead_by_phone(phone: str):
         with conn.cursor() as cur:
             # 1. Search CRM leads table (Prisma schema)
             cur.execute("""
-                SELECT id, "orgId", name, phone, email, "courseInterest", status, source, "nextFollowUp", metadata, "customFields", "createdAt", city
+                SELECT *
                 FROM leads
                 WHERE phone = %s OR phone = %s OR phone LIKE %s
                 LIMIT 1;
@@ -231,18 +247,20 @@ def get_lead_by_phone(phone: str):
 
             if row:
                 return {
-                    "id": row["id"],
-                    "name": row["name"] or "Future Pilot",
-                    "phone": row["phone"],
-                    "email": row["email"],
-                    "course_interest": row["courseInterest"] or "Flight Training",
-                    "status": row["status"],
-                    "classification": row["status"],
+                    "id": row.get("id"),
+                    "name": row.get("name") or "Future Pilot",
+                    "phone": row.get("phone"),
+                    "email": row.get("email"),
+                    "course_interest": row.get("courseInterest") or row.get("course_interest") or "Flight Training",
+                    "status": row.get("status"),
+                    "classification": row.get("classification") or row.get("status"),
                     "source": row.get("source") or "Website",
                     "city": row.get("city") or "",
                     "org_id": row.get("orgId"),
+                    "assigned_to": row.get("assignedTo"),
+                    "lost_reason": row.get("lostReason"),
                     "next_follow_up": row.get("nextFollowUp"),
-                    "created_at": row.get("createdAt"),
+                    "created_at": row.get("createdAt") or row.get("created_at"),
                     "metadata": row.get("metadata") or {},
                     "custom_fields": row.get("customFields") or {}
                 }
@@ -394,6 +412,385 @@ def save_lead(
     finally:
         conn.close()
 
+CRM_LEAD_STATUSES = {
+    "NEW": "Newly created lead in CRM, not yet engaged in a qualifying conversation.",
+    "CONTACTED": "Spoke to lead, initial conversation conducted, but neutral, exploring, or undecided.",
+    "INTERESTED": "Lead showed positive interest in courses, ground classes, simulator, or requested syllabus/details.",
+    "FOLLOW_UP": "Callback requested at a specific date/time, caller busy, or line was unanswered/busy.",
+    "COUNSELED": "Full in-depth counseling delivered during the call regarding courses, eligibility, NIOS, medicals, and flying syllabus.",
+    "APPLICATION_SUBMITTED": "Lead confirmed registration for webinar seat or submitted academy application.",
+    "CONVERTED": "Enrolled student (fees paid / batch confirmed).",
+    "LOST": "Disqualified, dropped out, or not viable for training."
+}
+
+CRM_LOST_REASONS = {
+    "NOT_ELIGIBLE": "Underage (<17), non-PCM unwilling to do NIOS, or medically disqualified.",
+    "PRICE_HIGH": "Tuition / flying cost beyond candidate's budget.",
+    "LOCATION_OUT_OF_SCOPE": "Unable to attend Dwarka Ramphal Chowk campus or relocate.",
+    "JOB_SEEKER": "Seeking immediate job/employment rather than aviation education/training.",
+    "NOT_INTERESTED": "Explicitly confirmed they are no longer interested in aviation.",
+    "INVALID_NUMBER": "Wrong number, invalid contact, or junk lead.",
+    "LANGUAGE_BARRIER": "Unable to communicate in Hindi or English."
+}
+
+DEFAULT_COUNSELORS = [
+    {
+        "id": "340e4b30-22bc-44f2-be56-85b061daadd1",
+        "name": "Senior Admissions Counselor",
+        "email": "admissions@airborneaviation.in",
+        "role": "ADMISSIONS_COUNSELOR"
+    },
+    {
+        "id": "340e4b30-22bc-44f2-be56-85b061daadd2",
+        "name": "Capt. Navrang Singh (Chief Mentor)",
+        "email": "navrang@airborneaviation.in",
+        "role": "ADMISSIONS_COUNSELOR"
+    }
+]
+
+def _ensure_uuid(val: str) -> str:
+    """Safely converts string to a valid UUID string (or deterministic namespace UUID5)."""
+    if not val:
+        return str(uuid.uuid4())
+    try:
+        return str(uuid.UUID(str(val)))
+    except (ValueError, AttributeError, TypeError):
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, str(val)))
+
+def parse_flexible_datetime(val, base_dt=None):
+    """
+    Parses datetime objects, ISO strings, or human natural language phrases like
+    'Tomorrow 3 PM', 'Saturday 11 AM', 'in 2 hours', 'after 3 days' into a timezone-aware UTC datetime.
+    """
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    if not isinstance(val, str):
+        return None
+    text = val.strip()
+    try:
+        clean_iso = text.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(clean_iso)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
+
+    base = base_dt or datetime.now(timezone.utc)
+    lower = text.lower()
+
+    # Relative hours or days
+    m_hours = re.search(r'(?:in|after)\s+(\d+)\s+hour', lower)
+    if m_hours:
+        return base + timedelta(hours=int(m_hours.group(1)))
+    m_days = re.search(r'(?:in|after)\s+(\d+)\s+day', lower)
+    if m_days:
+        return base + timedelta(days=int(m_days.group(1)))
+
+    days_ahead = 0
+    if 'tomorrow' in lower:
+        days_ahead = 1
+    elif 'day after tomorrow' in lower:
+        days_ahead = 2
+    else:
+        weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        for i, w in enumerate(weekdays):
+            if w in lower:
+                current_w = base.weekday()
+                days_ahead = (i - current_w) % 7
+                if days_ahead == 0:
+                    days_ahead = 7
+                break
+
+    target_date = (base + timedelta(days=days_ahead)).date()
+
+    time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', lower)
+    hour = 11
+    minute = 0
+    if time_match:
+        h = int(time_match.group(1))
+        m = int(time_match.group(2)) if time_match.group(2) else 0
+        meridiem = time_match.group(3)
+        if meridiem == 'pm' and h < 12:
+            h += 12
+        elif meridiem == 'am' and h == 12:
+            h = 0
+        elif not meridiem and h < 8:
+            h += 12
+        hour = h
+        minute = m
+
+    ist_offset = timezone(timedelta(hours=5, minutes=30))
+    dt_ist = datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=ist_offset)
+    return dt_ist.astimezone(timezone.utc)
+
+def get_available_counselors(org_id: str = None) -> list:
+    """
+    Fetches active admissions counselors from the users table.
+    Falls back to system counselors if DB is offline or table is empty.
+    """
+    conn = get_connection()
+    if not conn:
+        return DEFAULT_COUNSELORS
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute('''
+                SELECT id, name, email, role 
+                FROM users 
+                WHERE role IN ('ADMISSIONS_COUNSELOR', 'ADMIN', 'SUPER_ADMIN')
+                  AND "isActive" = true
+                ORDER BY "createdAt" ASC;
+            ''')
+            rows = cur.fetchall()
+            if rows:
+                return [
+                    {
+                        "id": str(row["id"]),
+                        "name": row["name"],
+                        "email": row["email"],
+                        "role": row["role"]
+                    }
+                    for row in rows
+                ]
+    except Exception as e:
+        print(f"Notice: get_available_counselors fallback ({e})")
+    finally:
+        conn.close()
+
+    return DEFAULT_COUNSELORS
+
+def assign_counselor_to_lead(
+    phone_or_lead_id: str,
+    counselor_id: str = None,
+    counselor_name: str = None,
+    reason: str = None,
+    org_id: str = None
+) -> dict:
+    """
+    Assigns an admissions counselor to a lead in the CRM leads table.
+    Updates leads."assignedTo" and logs an 'ASSIGNMENT' activity in lead_activities.
+    """
+    counselors = get_available_counselors(org_id)
+    selected_c = None
+    if counselor_id:
+        selected_c = next((c for c in counselors if str(c["id"]) == str(counselor_id)), None)
+    if not selected_c and counselor_name:
+        selected_c = next((c for c in counselors if counselor_name.lower() in c["name"].lower()), None)
+    if not selected_c:
+        selected_c = counselors[0] if counselors else DEFAULT_COUNSELORS[0]
+
+    assigned_uuid = _ensure_uuid(selected_c["id"])
+    c_name = selected_c["name"]
+    res_payload = {
+        "counselor_id": assigned_uuid,
+        "counselor_name": c_name,
+        "reason": reason or "Lead qualified for 1-on-1 counselor guidance",
+        "status": "ASSIGNED"
+    }
+
+    conn = get_connection()
+    if not conn:
+        print(f"Mock DB: Assigned counselor {c_name} ({assigned_uuid}) to {phone_or_lead_id}")
+        res_payload["phone_or_id"] = phone_or_lead_id
+        return res_payload
+
+    try:
+        with conn.cursor() as cur:
+            if not org_id:
+                org_id = get_default_org_id(cur)
+            cur.execute('SELECT id, phone, name FROM leads WHERE phone = %s OR id::text = %s LIMIT 1;', (phone_or_lead_id, phone_or_lead_id))
+            lead = cur.fetchone()
+            if lead:
+                lead_id = lead["id"]
+                cur.execute('''
+                    UPDATE leads 
+                    SET "assignedTo" = %s,
+                        "customFields" = COALESCE("customFields", '{}'::jsonb) || %s::jsonb,
+                        "lastActivityAt" = CURRENT_TIMESTAMP,
+                        "updatedAt" = CURRENT_TIMESTAMP
+                    WHERE id = %s;
+                ''', (
+                    assigned_uuid,
+                    json.dumps({"assigned_counselor": c_name, "counselor_id": assigned_uuid, "assigned_reason": reason}),
+                    lead_id
+                ))
+                cur.execute('''
+                    INSERT INTO lead_activities (
+                        id, "leadId", "orgId", "performedBy", "activityType", title, notes, outcome, "completedAt", metadata, "createdAt"
+                    ) VALUES (
+                        gen_random_uuid(), %s, %s, %s, 'ASSIGNMENT', %s, %s, 'ASSIGNED', CURRENT_TIMESTAMP, %s::jsonb, CURRENT_TIMESTAMP
+                    );
+                ''', (
+                    lead_id,
+                    org_id,
+                    assigned_uuid,
+                    f"Counselor Assigned: {c_name}",
+                    reason or "Assigned dedicated admissions counselor based on call qualification.",
+                    json.dumps(res_payload)
+                ))
+                print(f"CRM: Lead {lead_id} ({lead['phone']}) assigned to counselor {c_name}")
+                res_payload["lead_id"] = str(lead_id)
+    except Exception as e:
+        print(f"DB Error (assign_counselor_to_lead): {e}")
+    finally:
+        conn.close()
+
+    return res_payload
+
+def schedule_followup(
+    phone_or_lead_id: str,
+    followup_time,
+    notes: str = None,
+    reason: str = "CALLBACK_REQUESTED",
+    org_id: str = None
+) -> dict:
+    """
+    Schedules an automated or counselor follow-up task in the CRM.
+    Updates leads.status to 'FOLLOW_UP', updates 'nextFollowUp', and logs activity.
+    """
+    now = datetime.now(timezone.utc)
+    target_dt = parse_flexible_datetime(followup_time, base_dt=now) or (now + timedelta(hours=24))
+
+    res_payload = {
+        "status": "FOLLOW_UP",
+        "next_follow_up": target_dt.isoformat(),
+        "notes": notes or f"Follow-up callback scheduled for {target_dt.strftime('%Y-%m-%d %H:%M UTC')}",
+        "reason": reason
+    }
+
+    conn = get_connection()
+    if not conn:
+        print(f"Mock DB: Scheduled follow-up for {phone_or_lead_id} at {target_dt.isoformat()}")
+        res_payload["phone_or_id"] = phone_or_lead_id
+        return res_payload
+
+    try:
+        with conn.cursor() as cur:
+            if not org_id:
+                org_id = get_default_org_id(cur)
+            cur.execute('SELECT id, phone, name FROM leads WHERE phone = %s OR id::text = %s LIMIT 1;', (phone_or_lead_id, phone_or_lead_id))
+            lead = cur.fetchone()
+            if lead:
+                lead_id = lead["id"]
+                cur.execute('''
+                    UPDATE leads 
+                    SET status = 'FOLLOW_UP',
+                        "nextFollowUp" = %s,
+                        "nextCallAt" = %s,
+                        "lastActivityAt" = CURRENT_TIMESTAMP,
+                        "updatedAt" = CURRENT_TIMESTAMP
+                    WHERE id = %s;
+                ''', (target_dt, target_dt, lead_id))
+
+                cur.execute('''
+                    INSERT INTO lead_activities (
+                        id, "leadId", "orgId", "activityType", title, notes, outcome, "dueAt", metadata, "createdAt"
+                    ) VALUES (
+                        gen_random_uuid(), %s, %s, 'FOLLOW_UP', %s, %s, 'SCHEDULED', %s, %s::jsonb, CURRENT_TIMESTAMP
+                    );
+                ''', (
+                    lead_id,
+                    org_id,
+                    f"Scheduled Follow-up: {reason}",
+                    res_payload["notes"],
+                    target_dt,
+                    json.dumps(res_payload)
+                ))
+                print(f"CRM: Follow-up scheduled for lead {lead_id} at {target_dt}")
+                res_payload["lead_id"] = str(lead_id)
+    except Exception as e:
+        print(f"DB Error (schedule_followup): {e}")
+    finally:
+        conn.close()
+
+    return res_payload
+
+def schedule_meeting(
+    phone_or_lead_id: str,
+    meeting_time,
+    meeting_type: str = "CAMPUS_VISIT",
+    notes: str = None,
+    counselor_id: str = None,
+    counselor_name: str = None,
+    org_id: str = None
+) -> dict:
+    """
+    Schedules an in-person campus visit or formal counselling meeting at Dwarka campus.
+    Updates lead status to 'INTERESTED', assigns host counselor, and logs 'MEETING' activity.
+    """
+    now = datetime.now(timezone.utc)
+    target_dt = parse_flexible_datetime(meeting_time, base_dt=now) or (now + timedelta(days=1))
+    location = "Airborne Aviation Academy, E-549, 2nd Floor, Ramphal Chowk Road, Sector 7, Dwarka, New Delhi 110075" if meeting_type == "CAMPUS_VISIT" else "Online Meeting / WhatsApp Video"
+
+    res_payload = {
+        "status": "INTERESTED",
+        "meeting_type": meeting_type,
+        "meeting_time": target_dt.isoformat(),
+        "location": location,
+        "notes": notes or f"Campus visit & A320 simulator demo at Ramphal Chowk, Dwarka scheduled for {target_dt.strftime('%Y-%m-%d %H:%M UTC')}"
+    }
+
+    conn = get_connection()
+    if not conn:
+        print(f"Mock DB: Scheduled meeting ({meeting_type}) for {phone_or_lead_id} at {target_dt.isoformat()}")
+        res_payload["phone_or_id"] = phone_or_lead_id
+        return res_payload
+
+    try:
+        with conn.cursor() as cur:
+            if not org_id:
+                org_id = get_default_org_id(cur)
+            cur.execute('SELECT id, phone, name FROM leads WHERE phone = %s OR id::text = %s LIMIT 1;', (phone_or_lead_id, phone_or_lead_id))
+            lead = cur.fetchone()
+            if lead:
+                lead_id = lead["id"]
+                counselors = get_available_counselors(org_id)
+                assigned_c = counselors[0] if counselors else DEFAULT_COUNSELORS[0]
+                assigned_uuid = _ensure_uuid(assigned_c["id"])
+
+                cur.execute('''
+                    UPDATE leads 
+                    SET status = 'INTERESTED',
+                        classification = 'Hot',
+                        "assignedTo" = COALESCE("assignedTo", %s),
+                        "nextFollowUp" = %s,
+                        "customFields" = COALESCE("customFields", '{}'::jsonb) || %s::jsonb,
+                        "lastActivityAt" = CURRENT_TIMESTAMP,
+                        "updatedAt" = CURRENT_TIMESTAMP
+                    WHERE id = %s;
+                ''', (
+                    assigned_uuid,
+                    target_dt,
+                    json.dumps({"meeting_time": target_dt.isoformat(), "meeting_type": meeting_type, "location": location}),
+                    lead_id
+                ))
+
+                cur.execute('''
+                    INSERT INTO lead_activities (
+                        id, "leadId", "orgId", "performedBy", "activityType", title, notes, outcome, "dueAt", metadata, "createdAt"
+                    ) VALUES (
+                        gen_random_uuid(), %s, %s, %s, 'MEETING', %s, %s, 'CONFIRMED', %s, %s::jsonb, CURRENT_TIMESTAMP
+                    );
+                ''', (
+                    lead_id,
+                    org_id,
+                    assigned_uuid,
+                    f"Campus Visit & Simulator Session - Ramphal Chowk, Dwarka",
+                    res_payload["notes"],
+                    target_dt,
+                    json.dumps(res_payload)
+                ))
+                print(f"CRM: Meeting scheduled for lead {lead_id} at {target_dt}")
+                res_payload["lead_id"] = str(lead_id)
+                res_payload["counselor_name"] = assigned_c["name"]
+    except Exception as e:
+        print(f"DB Error (schedule_meeting): {e}")
+    finally:
+        conn.close()
+
+    return res_payload
+
 def record_call_outcome(
     phone: str,
     outcome: str,
@@ -411,7 +808,18 @@ def record_call_outcome(
     custom_fields: dict = None,
     user_query: str = None,
     booking_intent: str = None,
-    provider_call_id: str = None
+    provider_call_id: str = None,
+    crm_status: str = None,
+    lost_reason: str = None,
+    assign_counselor: bool = False,
+    counselor_id: str = None,
+    counselor_name: str = None,
+    counselor_reason: str = None,
+    followup_time = None,
+    followup_notes: str = None,
+    meeting_time = None,
+    meeting_type: str = None,
+    meeting_notes: str = None
 ):
     """
     Core CRM synchronization function.
@@ -438,39 +846,62 @@ def record_call_outcome(
         activity_title = f"AI Voice Call ({direction.title()})"
         activity_notes = summary or ""
 
-        # Check booking intent / outcome
-        if booking_intent in ["Campus Visit at Ramphal Chowk", "Campus Visit"]:
-            new_status = "INTERESTED"
+        # Determine priority CRM Status if explicitly classified
+        if crm_status and crm_status.upper() in VALID_LEAD_STATUSES:
+            new_status = crm_status.upper()
+
+        # Handle Lost status and specific lost reasons
+        if new_status == "LOST" or lost_reason:
+            if not new_status:
+                new_status = "LOST"
+            clean_reason = (lost_reason or "NOT_INTERESTED").upper()
+            activity_title = f"AI Call - Lost / Disqualified ({clean_reason})"
+            activity_notes = f"Disqualified/Lost reason: {clean_reason}. {summary or ''}"
+
+        # Check booking intent / meeting scheduling
+        parsed_meeting = parse_flexible_datetime(meeting_time or (custom_fields.get("scheduled_time") if custom_fields else None))
+        if meeting_time or booking_intent in ["Campus Visit at Ramphal Chowk", "Campus Visit"]:
+            if new_status != "LOST":
+                new_status = "INTERESTED"
             activity_type = "MEETING"
             activity_title = "Scheduled Campus Visit - Ramphal Chowk, Dwarka"
+            if parsed_meeting:
+                next_follow_up = parsed_meeting
         elif booking_intent in ["Counselling Call", "Admissions Call"]:
-            new_status = "INTERESTED"
+            if new_status != "LOST":
+                new_status = "INTERESTED"
             activity_type = "CALL"
             activity_title = "Scheduled Admission Counsellor Call"
 
+        # Check follow-up scheduling
+        parsed_followup = parse_flexible_datetime(followup_time or callback_time)
+        if parsed_followup:
+            next_follow_up = parsed_followup
+            if activity_type != "MEETING" and new_status != "LOST":
+                new_status = "FOLLOW_UP"
+                activity_type = "FOLLOW_UP"
+                activity_title = "AI Voice Call - Follow-up Scheduled"
+                activity_notes = f"Follow-up scheduled for {parsed_followup.strftime('%Y-%m-%d %H:%M UTC')}. {followup_notes or summary or ''}"
+
         if outcome in ["NO_ANSWER", "BUSY", "REJECTED", "MISSED", "FAILED"]:
-            new_status = "FOLLOW_UP"
-            next_follow_up = now + timedelta(hours=2)
+            if not new_status or new_status in ["NEW", "CONTACTED"]:
+                new_status = "FOLLOW_UP"
+            next_follow_up = next_follow_up or (now + timedelta(hours=2))
             activity_title = f"AI Voice Call - {outcome.replace('_', ' ').title()}"
             activity_notes = f"Caller did not answer / line {outcome.lower()}. Automated follow-up set for 2 hours later."
         elif outcome == "EARLY_HANGUP":
-            new_status = "FOLLOW_UP"
-            next_follow_up = now + timedelta(hours=4)
+            if not new_status or new_status in ["NEW", "CONTACTED"]:
+                new_status = "FOLLOW_UP"
+            next_follow_up = next_follow_up or (now + timedelta(hours=4))
             activity_title = "AI Voice Call - Disconnected Early"
             activity_notes = f"Call disconnected shortly after pickup (duration: {duration}s). Follow-up scheduled for 4 hours later."
         elif outcome == "CALLBACK_REQUESTED":
-            new_status = "FOLLOW_UP"
-            activity_type = "FOLLOW_UP"
-            activity_title = "AI Voice Call - Callback Requested"
-            if isinstance(callback_time, datetime):
-                next_follow_up = callback_time
-            elif isinstance(callback_time, str) and callback_time:
-                try:
-                    next_follow_up = datetime.fromisoformat(callback_time.replace("Z", "+00:00"))
-                except Exception:
-                    next_follow_up = now + timedelta(hours=24)
-            else:
-                next_follow_up = now + timedelta(hours=24)
+            if not new_status or new_status in ["NEW", "CONTACTED"]:
+                new_status = "FOLLOW_UP"
+            if activity_type != "MEETING":
+                activity_type = "FOLLOW_UP"
+                activity_title = "AI Voice Call - Callback Requested"
+            next_follow_up = next_follow_up or (now + timedelta(hours=24))
             activity_notes = f"Customer requested a callback at {next_follow_up.strftime('%Y-%m-%d %H:%M UTC')}. {summary or ''}"
         elif outcome in ["CONNECTED", "COMPLETED"]:
             if not new_status:
@@ -478,9 +909,24 @@ def record_call_outcome(
                     new_status = "INTERESTED"
                 else:
                     new_status = "CONTACTED"
-            if not activity_title.startswith("Scheduled"):
+            if not activity_title.startswith("Scheduled") and new_status != "LOST":
                 activity_title = f"AI Call Completed - {course_interest or (lead.get('course_interest') if lead else 'Pilot Training')}"
-            activity_notes = summary or f"AI qualifying call completed. Classification: {classification}."
+            if new_status != "LOST":
+                activity_notes = summary or f"AI qualifying call completed. Status: {new_status}, Classification: {classification}."
+
+        # Counselor assignment lookup
+        assigned_counselor_uuid = None
+        if assign_counselor or new_status in ["INTERESTED", "COUNSELED"] or meeting_time or booking_intent in ["Campus Visit at Ramphal Chowk", "Campus Visit", "Counselling Call"]:
+            counselors = get_available_counselors(org_id)
+            selected_c = None
+            if counselor_id:
+                selected_c = next((c for c in counselors if str(c.get("id")) == str(counselor_id)), None)
+            if not selected_c and counselor_name:
+                selected_c = next((c for c in counselors if counselor_name.lower() in c.get("name", "").lower()), None)
+            if not selected_c:
+                selected_c = counselors[0] if counselors else DEFAULT_COUNSELORS[0]
+            assigned_counselor_uuid = _ensure_uuid(selected_c["id"])
+            counselor_name = counselor_name or selected_c["name"]
 
         custom_fields_payload = custom_fields or {}
         if user_query:
@@ -489,6 +935,14 @@ def record_call_outcome(
             custom_fields_payload["booking_intent"] = booking_intent
         if classification:
             custom_fields_payload["classification"] = classification
+        if new_status:
+            custom_fields_payload["crm_status"] = new_status
+        if lost_reason:
+            custom_fields_payload["lost_reason"] = lost_reason
+        if counselor_name:
+            custom_fields_payload["assigned_counselor"] = counselor_name
+        if next_follow_up:
+            custom_fields_payload["scheduled_time"] = next_follow_up.isoformat()
         custom_fields_json = json.dumps(custom_fields_payload)
 
         with conn.cursor() as cur:
@@ -501,19 +955,20 @@ def record_call_outcome(
                 cur.execute("""
                     INSERT INTO leads (
                         id, "orgId", name, phone, email, city, "courseInterest", status, 
-                        classification, source, "customFields", metadata, "lastActivityAt", 
+                        classification, source, "assignedTo", "lostReason", "customFields", metadata, "lastActivityAt", 
                         "nextFollowUp", "createdAt", "updatedAt"
                     )
                     VALUES (
                         gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, 
-                        %s, 'VOICE_AGENT', %s::jsonb, %s::jsonb, CURRENT_TIMESTAMP, 
+                        %s, 'VOICE_AGENT', %s, %s, %s::jsonb, %s::jsonb, CURRENT_TIMESTAMP, 
                         %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
                     RETURNING id;
                 """, (
                     org_id, lead_name or "Inbound Caller", cleaned_phone, email, city, 
                     course_interest or "Flight Training", new_status or "NEW",
-                    classification or "Cold", custom_fields_json, custom_fields_json, next_follow_up
+                    classification or "Cold", assigned_counselor_uuid, lost_reason,
+                    custom_fields_json, custom_fields_json, next_follow_up
                 ))
                 new_row = cur.fetchone()
                 lead_id = new_row["id"] if new_row else None
@@ -542,6 +997,14 @@ def record_call_outcome(
                 if new_status:
                     update_fields.append('status = %s')
                     params.append(new_status)
+
+                if lost_reason:
+                    update_fields.append('"lostReason" = %s')
+                    params.append(lost_reason)
+
+                if assigned_counselor_uuid:
+                    update_fields.append('"assignedTo" = %s')
+                    params.append(assigned_counselor_uuid)
 
                 if classification:
                     update_fields.append('classification = %s')
@@ -641,13 +1104,14 @@ def record_call_outcome(
             else:
                 cur.execute("""
                     INSERT INTO lead_activities (
-                        id, "leadId", "orgId", "activityType", title, notes, outcome, "dueAt", "completedAt", "durationMins", metadata, "createdAt"
+                        id, "leadId", "orgId", "performedBy", "activityType", title, notes, outcome, "dueAt", "completedAt", "durationMins", metadata, "createdAt"
                     ) VALUES (
-                        gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
+                        gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
                     );
                 """, (
                     lead_id,
                     org_id,
+                    assigned_counselor_uuid,
                     activity_type,
                     activity_title,
                     activity_notes,
@@ -657,6 +1121,47 @@ def record_call_outcome(
                     duration_mins,
                     json.dumps(activity_metadata)
                 ))
+
+            # If counselor assigned and distinct activity desired
+            if lead_id and assigned_counselor_uuid and (assign_counselor or new_status in ["INTERESTED", "COUNSELED"]):
+                try:
+                    cur.execute("""
+                        INSERT INTO lead_activities (
+                            id, "leadId", "orgId", "performedBy", "activityType", title, notes, outcome, "completedAt", metadata, "createdAt"
+                        ) VALUES (
+                            gen_random_uuid(), %s, %s, %s, 'ASSIGNMENT', %s, %s, 'ASSIGNED', CURRENT_TIMESTAMP, %s::jsonb, CURRENT_TIMESTAMP
+                        );
+                    """, (
+                        lead_id,
+                        org_id,
+                        assigned_counselor_uuid,
+                        f"Counselor Assigned: {counselor_name}",
+                        counselor_reason or "Assigned dedicated admissions counselor based on lead call response.",
+                        json.dumps({"counselor_id": assigned_counselor_uuid, "counselor_name": counselor_name})
+                    ))
+                except Exception as assign_act_err:
+                    print(f"DB Notice (assignment activity log): {assign_act_err}")
+
+            # If a distinct follow-up callback was requested during the call
+            if lead_id and followup_time and activity_type != "FOLLOW_UP":
+                try:
+                    cur.execute("""
+                        INSERT INTO lead_activities (
+                            id, "leadId", "orgId", "performedBy", "activityType", title, notes, outcome, "dueAt", metadata, "createdAt"
+                        ) VALUES (
+                            gen_random_uuid(), %s, %s, %s, 'FOLLOW_UP', %s, %s, 'SCHEDULED', %s, %s::jsonb, CURRENT_TIMESTAMP
+                        );
+                    """, (
+                        lead_id,
+                        org_id,
+                        assigned_counselor_uuid,
+                        "Scheduled Follow-up Call",
+                        followup_notes or f"Follow-up callback requested for {next_follow_up.strftime('%Y-%m-%d %H:%M UTC') if next_follow_up else 'later'}",
+                        next_follow_up,
+                        json.dumps({"followup_time": str(next_follow_up), "followup_notes": followup_notes})
+                    ))
+                except Exception as fu_act_err:
+                    print(f"DB Notice (followup activity log): {fu_act_err}")
 
             # Update calling_jobs table if it exists
             if lead_id or provider_call_id:
