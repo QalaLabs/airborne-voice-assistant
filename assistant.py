@@ -119,10 +119,11 @@ MANDATORY BEHAVIORAL GUARDRAILS:
    When the caller asks about visiting our Dwarka campus, seeing the academy, or meeting Captain Navrang in person:
    You MUST say exactly: "My classes end by 12:30. You can set up a meeting with our admissions counselor and mention that you want to discuss your roadmap with Captain Navrang. Should I ask them to get in touch with you?"
 
-3. STRICT LANGUAGE ADAPTATION:
-   - If the caller speaks in Hindi -> You MUST respond in clear, accessible, polite English. Never respond in Hindi.
+3. STRICT LANGUAGE ADAPTATION & PREFERRED LANGUAGE:
+   - If the caller speaks or prefers Hindi -> You MUST respond in clear, accessible, polite Hindi or natural Hinglish. Speak to callers with a language barrier in their preferred language so they feel fully supported and comfortable. Never force English onto Hindi-speaking callers or parents.
    - If the caller speaks in English -> Respond in fluent, professional English.
    - If the caller speaks in Hinglish -> Adapt and blend natural, conversational Hinglish.
+   - Always match the caller's comfort language. Language should never be a barrier to counseling.
 
 4. Active Listening & Pausing: If the candidate begins talking, asking questions, or says 'wait' / 'pause', pause immediately and listen with complete focus. Never speak over the caller.
 
@@ -207,7 +208,7 @@ CONVERSATIONAL GUIDELINES:
         - JOB_SEEKER: Seeking direct job/employment instead of training.
         - NOT_INTERESTED: Explicitly confirmed they are no longer interested in aviation.
         - INVALID_NUMBER: Wrong contact or unreachable person.
-        - LANGUAGE_BARRIER: Unable to communicate in Hindi or English.
+        - LANGUAGE_BARRIER: Genuine mutual inability to communicate despite language adaptation (e.g., unsupported regional/foreign dialect where mutual understanding fails). Note: Speaking in Hindi, Hinglish, or requesting Hindi is NOT a language barrier—the agent speaks their preferred language.
 
     - ASSIGNING THE COUNSELOR:
       * You have full authority to assign a dedicated admissions counselor to the lead.
@@ -478,7 +479,7 @@ def analyze_call_transcript_and_qualify(
             - 'JOB_SEEKER': Seeking direct job/airline hiring instead of academy training.
             - 'NOT_INTERESTED': Confirmed they have dropped aviation plans.
             - 'INVALID_NUMBER': Wrong person / wrong number.
-            - 'LANGUAGE_BARRIER': Language communication impossible.
+            - 'LANGUAGE_BARRIER': Communication impossible even after language adaptation (unsupported language). Note: Speaking in Hindi/Hinglish is NOT a language barrier.
             Or null if not LOST.
         17. assign_counselor: true if the candidate needs an admissions counselor assigned (e.g., requested guidance, booked visit/call, or showed positive interest), else false.
         18. counselor_assignment_reason: Reason for counselor assignment (e.g., 'Candidate requested 1-on-1 guidance for CPL ground school', 'Campus visit scheduled').

@@ -217,10 +217,20 @@ def check_audibility_guardrail(caller_input: str, phone: str = "") -> Optional[s
     return None
 
 
+# Explicit language preference requests (e.g., caller asking for Hindi)
+HINDI_REQUEST_PATTERNS = [
+    r"\b(hindi\s+(me|mein|mai)\s+(baat|bolo|boliye|samjhao|batao))\b",
+    r"\b(can (we|you)|could you|please)\s+(speak|talk)\s+(in\s+)?hindi\b",
+    r"\b(kya aap|aap)\s+hindi\s+(bol sakte|bolti|bolte)\b",
+    r"\bhindi\s+please\b",
+    r"\bspeak in hindi\b",
+    r"\btalk in hindi\b"
+]
+
 def detect_language_adaptation(caller_input: str, phone: str = "") -> Tuple[str, str, str]:
     """
     Classifies caller's input into:
-    - 'HINDI'   -> Enforced Agent Output: 'ENGLISH'
+    - 'HINDI'   -> Enforced Agent Output: 'HINDI' (speaks in caller's preferred language to eliminate language barrier)
     - 'ENGLISH' -> Enforced Agent Output: 'ENGLISH'
     - 'HINGLISH'-> Enforced Agent Output: 'HINGLISH'
 
@@ -229,6 +239,29 @@ def detect_language_adaptation(caller_input: str, phone: str = "") -> Tuple[str,
     text = (caller_input or "").strip().lower()
     if not text:
         return "ENGLISH", "ENGLISH", "Respond in clear English."
+
+    # 0. Check explicit request to converse in Hindi
+    for pat in HINDI_REQUEST_PATTERNS:
+        if re.search(pat, text, re.IGNORECASE):
+            detected = "HINDI"
+            enforced = "HINDI"
+            directive = (
+                "LANGUAGE GUARDRAIL ACTIVE: The caller explicitly requested to speak in Hindi. "
+                "You MUST respond in polite, clear, and reassuring conversational Hindi (or natural Hinglish) "
+                "in their preferred language to ensure complete comfort and eliminate any language barrier."
+            )
+            log_highlight(
+                "[GUARDRAIL ENFORCED: LANGUAGE ADAPTATION]",
+                {
+                    "Caller Phone": phone or "N/A",
+                    "Caller Input": caller_input,
+                    "Detected Lang": detected,
+                    "Enforced Lang": enforced,
+                    "Directive": directive
+                },
+                border_char="~"
+            )
+            return detected, enforced, directive
 
     # 1. Check Devanagari script presence
     has_devanagari = bool(HINDI_DEVANAGARI_REGEX.search(text))
@@ -243,11 +276,11 @@ def detect_language_adaptation(caller_input: str, phone: str = "") -> Tuple[str,
 
     if has_devanagari or (hindi_count >= 2 and english_count == 0) or (hindi_count >= 3 and english_count <= 1):
         detected = "HINDI"
-        enforced = "ENGLISH"
+        enforced = "HINDI"
         directive = (
             "LANGUAGE GUARDRAIL ACTIVE: The caller spoke in Hindi. "
-            "You MUST reply strictly in clear, polite, and accessible ENGLISH. "
-            "Do NOT reply in Hindi or Hinglish."
+            "You MUST reply in clear, polite, and accessible conversational Hindi (or natural Hinglish). "
+            "Speak to them in their preferred language so they feel fully supported and there is no language barrier."
         )
     elif hindi_count >= 1 and english_count >= 1:
         detected = "HINGLISH"

@@ -430,7 +430,7 @@ CRM_LOST_REASONS = {
     "JOB_SEEKER": "Seeking immediate job/employment rather than aviation education/training.",
     "NOT_INTERESTED": "Explicitly confirmed they are no longer interested in aviation.",
     "INVALID_NUMBER": "Wrong number, invalid contact, or junk lead.",
-    "LANGUAGE_BARRIER": "Unable to communicate in Hindi or English."
+    "LANGUAGE_BARRIER": "Unable to communicate despite language adaptation (unsupported language). Note: Speaking in Hindi/Hinglish is accommodated in caller's preferred language."
 }
 
 VALID_LEAD_STATUSES = {

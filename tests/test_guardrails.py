@@ -45,16 +45,18 @@ def test_campus_visit_guardrail():
         assert "admissions counselor" in resp
 
 def test_language_adaptation():
-    # Pure Hindi -> Enforced English
+    # Pure Hindi -> Enforced Hindi (speak in caller's preferred language to remove language barrier)
     hindi_queries = [
         "kya main pilot ban sakta hoon bina physics ke",
-        "mujhe ground classes ke baare mein janna hai kitna kharcha aayega"
+        "mujhe ground classes ke baare mein janna hai kitna kharcha aayega",
+        "kripya hindi mein baat karein",
+        "can you speak in hindi"
     ]
     for q in hindi_queries:
         detected, enforced, directive = guardrails.detect_language_adaptation(q, phone="+919999999999")
         assert detected == "HINDI", f"Expected HINDI for: {q}, got {detected}"
-        assert enforced == "ENGLISH", f"Expected ENGLISH enforced for: {q}"
-        assert "strictly in clear, polite, and accessible ENGLISH" in directive
+        assert enforced == "HINDI", f"Expected HINDI enforced for: {q}"
+        assert "preferred language" in directive.lower()
 
     # Hinglish -> Enforced Hinglish
     hinglish_queries = [

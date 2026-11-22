@@ -22,7 +22,7 @@ elevenlabs>=2.0.0
 
 # Google Cloud Platform (Cloud Storage & Cloud SQL & Text-to-Speech)
 google-cloud-storage>=2.14.0
-google-cloud-texttospeech>=2.16.0,<2.26.0
+google-cloud-texttospeech>=2.31.0,<2.35.0
 
 # Vertex AI Agent Engine client (agent_client.py) -- only needed once
 # USE_AGENT_ENGINE is enabled. Package name/version UNVERIFIED (see plan's
