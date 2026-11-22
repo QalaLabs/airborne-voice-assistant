@@ -79,7 +79,7 @@ AGENT_TOKEN = config.AGENT_TOKEN or os.getenv("AGENT_TOKEN", "")
 # Phone audio is narrowband; Piopiy docs recommend 16 kHz PCM to avoid heavy resampling latency.
 TTS_SAMPLE_RATE = int(os.getenv("WORKER_TTS_SAMPLE_RATE", "16000"))
 # Cellular ring-trip clicks / carrier spikes must not cancel the greeting before the caller hears it.
-BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "0.8"))
+BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "1.2"))
 
 
 class GraceWindowInterruptionStrategy(VADUserTurnStartStrategy):
@@ -250,8 +250,8 @@ class FastStreamingElevenLabsTTS(TTSService):
                     "text": clean_text,
                     "model_id": self._model_id,
                     "voice_settings": {
-                        "stability": 0.50,
-                        "similarity_boost": 0.75,
+                        "stability": 0.65,
+                        "similarity_boost": 0.85,
                         "speed": 1.0
                     }
                 }
@@ -287,9 +287,8 @@ ElevenLabsTTSService = FastStreamingElevenLabsTTS
 
 class ResilientGoogleLLMService(GoogleLLMService if GoogleLLMService is not None else object):
     """
-    Guarantees strict alternating turn structure for Google Gemini API.
-    Prevents 'Requests ending with a model turn are not supported' (400 Bad Request)
-    when caller pauses or rapid VAD slices trigger multiple completions.
+    Guarantees strict alternating turn structure for Google Gemini API and
+    enforces deterministic behavioral guardrails (Identity, Campus Visits, Language Adaptation).
     """
     async def _stream_content(self, params_from_context):
         messages = params_from_context.get("messages", [])
@@ -304,6 +303,22 @@ class ResilientGoogleLLMService(GoogleLLMService if GoogleLLMService is not None
 
         if not cleaned_messages:
             return
+
+        # Check deterministic guardrails on latest user input
+        last_user_msg = cleaned_messages[-1]
+        user_content = ""
+        if isinstance(last_user_msg, dict):
+            user_content = last_user_msg.get("content", "")
+        else:
+            user_content = getattr(last_user_msg, "content", "")
+
+        import guardrails
+        override_resp, enforced_lang, guardrail_meta = guardrails.evaluate_all_guardrails(str(user_content))
+        if override_resp:
+            logger.info(f"🛡️ Guardrail active: delivering instant canonical response for query: '{user_content}'")
+            async def _guardrail_stream():
+                yield override_resp
+            return _guardrail_stream()
 
         import time
         params_from_context["messages"] = cleaned_messages
@@ -349,7 +364,21 @@ YOUR PRIMARY MISSION:
 
 YOUR PERSONA & TONE:
 - Senior Counselor & Mentor: Authoritative, sharp, highly knowledgeable, yet warm, patient, and encouraging. You speak with the confidence of an experienced mentor guiding a pilot's career.
-- Language Style (Natural Mix): Fluent conversational English blended naturally with professional Hinglish (e.g., "Got it,", "Haan bilkul,", "Understood,", "Dekhiye, pilot training ke liye...", "Bilkul clear kar deta hoon"). Match the caller's language comfort seamlessly.
+- Language Style (Natural Mix): Blend fluent English with conversational Hinglish naturally. Match the caller's language comfort according to the strict language guardrail below.
+
+MANDATORY BEHAVIORAL GUARDRAILS:
+1. IDENTITY VERIFICATION:
+   If the caller asks if you are an AI, bot, virtual assistant, robot, machine, or asks if you are really Captain Navrang:
+   You MUST say exactly: "I am his voice speaking through a small knowledge capsule of his experience, but during your visit you will be meeting a real pilot."
+
+2. CAMPUS VISIT & IN-PERSON MEETING:
+   When the caller asks about visiting our Dwarka campus, seeing the academy, or meeting Captain Navrang in person:
+   You MUST say exactly: "My classes end by 12:30. You can set up a meeting with our admissions counselor and mention that you want to discuss your roadmap with Captain Navrang. Should I ask them to get in touch with you?"
+
+3. STRICT LANGUAGE ADAPTATION:
+   - If the caller speaks in Hindi -> You MUST respond in clear, accessible, polite English. Never respond in Hindi.
+   - If the caller speaks in English -> Respond in fluent, professional English.
+   - If the caller speaks in Hinglish -> Adapt and blend natural, conversational Hinglish.
 
 CORE CONVERSATIONAL PRINCIPLES:
 1. Listen to the Query and Answer With Genuine Substance:
@@ -371,7 +400,7 @@ CORE CONVERSATIONAL PRINCIPLES:
 
 4. Deep Aviation Ground Truth:
    - CPL Requirements: 10+2 with Physics & Maths (if Arts/Commerce, explain NIOS open school is 100% DGCA accepted and can be cleared alongside ground school).
-   - CPL Ground Classes: Covers all 5 DGCA papers (Air Navigation, Meteorology, Air Regulations, Technical General, RTR). Fee: Rs. 2,70,000 (only state if asked).
+   - CPL Ground Classes: Covers all 5 DGCA theory papers (Air Navigation, Meteorology, Air Regulations, Technical General, Technical Specific) plus RTR prep. Fee: Rs. 2,70,000 (only state if asked).
    - Full CPL (Ground + 200 Flying Hours): Cost ~Rs. 55 to 65 Lakhs at DGCA-approved flying schools in India or abroad (USA/South Africa/NZ). Only state if asked.
    - CPL Holders & Next Steps: A CPL holder already has their commercial license. Their immediate next steps are Airline Preparation & Type Rating (Airbus A320 or Boeing 737).
    - Airbus A320 Type Rating & DGCA Technical Exams:
@@ -746,7 +775,7 @@ async def create_session(
         vad=vad,
         telecmi_params=telecmi_params,
         allow_interruptions=True,
-        interruption_strategy=GraceWindowInterruptionStrategy(grace_secs=0.8),
+        interruption_strategy=GraceWindowInterruptionStrategy(grace_secs=BARGE_IN_GRACE_SECS),
     )
 
     logger.info("VoiceAgent pipeline active. Tuned 500ms turn latency & real-time interruption pause armed!")
@@ -817,16 +846,23 @@ async def create_session(
                 logger.warning(f"Notice enqueuing critic: {critic_e}")
         elif customer_phone != "+910000000000":
             import database
+            import automation
             logger.info(f"Recording single-turn connected call for {customer_phone} ({direction})...")
+            is_early = bool(session_greeting)
             await asyncio.to_thread(
                 database.record_call_outcome,
                 phone=customer_phone,
-                outcome="EARLY_HANGUP" if session_greeting else "COMPLETED",
+                outcome="EARLY_HANGUP" if is_early else "COMPLETED",
                 direction=direction,
                 duration=15,
                 summary="Candidate answered, heard counselor greeting, but disconnected before full qualification.",
                 provider_call_id=call_id
             )
+            if is_early:
+                logger.info(f"Triggering automated WhatsApp drop-off recovery for {customer_phone}...")
+                asyncio.create_task(
+                    asyncio.to_thread(automation.trigger_dropoff_recovery, customer_phone, is_webinar=True)
+                )
     except Exception as pe:
         logger.error(f"Error persisting call history / post-call pipeline: {pe}")
     finally:

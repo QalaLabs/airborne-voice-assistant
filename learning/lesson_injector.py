@@ -73,7 +73,7 @@ def fetch_active_lessons_from_db(limit: int = 5) -> List[Dict[str, Any]]:
 def get_active_lessons_prompt(customer_phone: str = "", context: str = "") -> str:
     """
     Compiles active negative constraints and critical lessons into a prompt block.
-    Called by Track A (adk_core/agent.py or precall_manager.py) before starting a call session.
+    Called by precall_manager / live telephony session setup before starting a call.
     """
     lessons = fetch_active_lessons_from_db(limit=5)
     if not lessons:

@@ -64,7 +64,14 @@ def map_row_to_dossier_data(row: Dict[str, str], csv_filename: str) -> Dict[str,
     education = None
     call_objective = None
 
-    if "cpl_holder" in fname_lower or clean_row.get("are_you_a_cpl_holder?") == "yes":
+    if "webinar" in fname_lower or "webinar" in clean_row.get("campaign name", "") or "webinar" in clean_row.get("source", "") or "webinar" in clean_row.get("platform", "") or "webinar" in clean_row.get("form name", ""):
+        course_interest = "Parents' Webinar: Pilot Career"
+        call_objective = (
+            "Engage parent/candidate regarding the live Parents' Webinar (Saturday 21 Nov 2:00 PM IST). "
+            "Address any upfront questions on pilot training costs or eligibility, confirm their seat reservation at "
+            "airborneaviation.in/webinar (Rs. 21 registration), and ensure they receive the WhatsApp join link."
+        )
+    elif "cpl_holder" in fname_lower or clean_row.get("are_you_a_cpl_holder?") == "yes":
         course_interest = "Airbus A320 Type Rating & Airline Preparation"
         prior_exp = "Holds Commercial Pilot License (CPL)"
         call_objective = (

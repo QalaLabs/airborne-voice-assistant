@@ -52,7 +52,7 @@ def speak_and_get_url(text: str) -> str:
         payload = {
             "text": text,
             "model_id": config.ELEVENLABS_MODEL_ID or "eleven_flash_v2_5",
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
+            "voice_settings": {"stability": 0.65, "similarity_boost": 0.85}
         }
         try:
             resp = _tts_session.post(url, json=payload, headers=headers, timeout=10)

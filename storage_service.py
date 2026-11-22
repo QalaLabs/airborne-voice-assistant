@@ -108,11 +108,38 @@ def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> 
     """
     Downloads call recording from TeleCMI / Twilio and archives it to GCS.
     Uses unique timestamp and random identifier to prevent overwriting repeat calls.
+    Handles local file paths gracefully (skips HTTP download, uploads from disk).
     Returns the permanent Cloud Storage public URL.
     """
     if not recording_url:
         return ""
 
+    # --- FIX: Detect local file paths and handle them without HTTP download ---
+    is_local_file = (
+        os.path.isfile(recording_url)
+        or (not recording_url.startswith("http://") and not recording_url.startswith("https://"))
+    )
+
+    if is_local_file:
+        if os.path.isfile(recording_url):
+            print(f"Local recording file detected: {recording_url}")
+            import time
+            import uuid
+            timestamp = int(time.time())
+            rand_suffix = uuid.uuid4().hex[:6]
+            blob_name = f"call-recordings/call_{call_identifier}_{timestamp}_{rand_suffix}.mp3"
+            client = get_storage_client()
+            if client and GCS_BUCKET_NAME:
+                try:
+                    return upload_audio_file(recording_url, blob_name)
+                except Exception as e:
+                    print(f"Failed to upload local recording to GCS ({e}). Using local path.")
+            return recording_url
+        else:
+            print(f"Local recording path '{recording_url}' not found on disk. Skipping GCS upload (test/dev mode).")
+            return recording_url
+
+    # --- Standard remote URL handling (with SSRF guard) ---
     if not is_safe_recording_url(recording_url):
         print(f"Recording URL rejected (not https / not an allowed carrier host / non-public address): {recording_url}")
         return recording_url
@@ -128,11 +155,9 @@ def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> 
             print(f"Downloading call recording from {recording_url}...")
             from urllib.parse import urlparse
             host = (urlparse(recording_url).hostname or "").lower()
-            # Twilio credentials go only to Twilio's own domain, never to any URL that merely contains "twilio".
             auth = (config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN) if (_host_matches(host, "twilio.com") and config.TWILIO_ACCOUNT_SID) else None
             resp = requests.get(recording_url, auth=auth, timeout=30, allow_redirects=False)
             if resp.is_redirect:
-                # Follow a single redirect, but only to another safe host and without credentials.
                 target = requests.compat.urljoin(recording_url, resp.headers.get("Location", ""))
                 if not is_safe_recording_url(target):
                     raise ValueError(f"redirect to disallowed URL {target}")

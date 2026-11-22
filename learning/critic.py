@@ -25,7 +25,7 @@ from learning.fact_checker import audit_transcript_facts
 logger = logging.getLogger("vagadk.critic")
 
 CRITIC_PROMPT_TEMPLATE = """You are the Senior Lead Auditor and Admission Quality Director for Airborne Aviation Academy.
-Analyze the following phone call transcript between an Admissions AI Counselor (Piyush) and a prospective student.
+Analyze the following phone call transcript between an Admissions AI Counselor (Captain Navrang) and a prospective student.
 
 EVALUATION CRITERIA:
 1. Tone & Brevity: Did the AI keep responses to 2-3 short, natural phone sentences?

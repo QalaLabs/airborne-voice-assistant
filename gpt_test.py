@@ -27,7 +27,7 @@ def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "",
     Uses persistent HTTP keep-alive connection and sub-second model routing.
     """
     preferred_model = config.GEMINI_MODEL or "gemini-3.8-flash"
-    fallback_models = [preferred_model, "gemini-3.8-flash", "gemini-2.0-flash", "gemini-2.5-flash"]
+    fallback_models = [preferred_model, "gemini-3.8-flash", "gemini-flash-latest"]
     # De-duplicate while preserving order
     models_to_try = list(dict.fromkeys(fallback_models))
     
@@ -123,8 +123,9 @@ def chat_with_vertex_ai(prompt: str, history: list = None, system_prompt: str = 
         max_output_tokens=500 if json_mode else 300,
         response_mime_type="application/json" if json_mode else None
     )
+    vertex_model = getattr(config, "GEMINI_MODEL", None) or "gemini-3.8-flash"
     resp = genai_client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=vertex_model,
         contents=contents,
         config=config_params
     )
@@ -175,7 +176,7 @@ def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", js
         except Exception as e:
             print(f"OpenAI query failed: {e}")
             
-    # 4. Final Mock Fallback: Mock Response
+    # 4. Final Mock Fallback: Context-aware mock response
     if json_mode:
         return json.dumps({
             "course_interest": "DGCA CPL Ground Classes",
@@ -184,6 +185,59 @@ def chat_with_gpt(prompt: str, history: list = None, system_prompt: str = "", js
             "timeline_urgency": "Immediate",
             "classification": "Hot"
         })
+
+    # Build a context-aware mock response based on the user's latest input
+    prompt_lower = prompt.lower() if prompt else ""
+
+    if any(w in prompt_lower for w in ["visit", "campus", "saturday", "sunday", "come", "see", "tour", "simulator tour"]):
+        return (
+            "Absolutely! You are most welcome to visit our campus at Ramphal Chowk, Dwarka. "
+            "We have sessions available on Saturday and Sunday mornings. What time works best for you? "
+            "I will note it down and our team will confirm via WhatsApp."
+        )
+    elif any(w in prompt_lower for w in ["simulator", "a320", "fbs", "cockpit"]):
+        return (
+            "Our Airbus A320 Fixed-Base Simulator is right here at our Dwarka campus. "
+            "Each simulator session costs Rs. 12,000. Would you like to book a walkthrough or a hands-on session?"
+        )
+    elif any(w in prompt_lower for w in ["time", "slot", "11 am", "morning", "afternoon", "evening", "3 pm", "schedule", "book"]):
+        return (
+            "Perfect! I have noted your preferred time. Our admissions team will send a confirmation "
+            "along with the campus address and syllabus brochure directly to your WhatsApp. See you soon! Clear skies!"
+        )
+    elif any(w in prompt_lower for w in ["fee", "cost", "price", "fees", "kitna", "paisa"]):
+        return (
+            "Thank you for asking. Our DGCA CPL Ground Classes fee is Rs. 2,70,000, covering all 5 DGCA papers "
+            "plus RTR prep. Classes are mentored directly by Captain Navrang Singh with a batch size of maximum 25 students."
+        )
+    elif any(w in prompt_lower for w in ["eligibility", "qualification", "12th", "nios", "maths", "physics", "age"]):
+        return (
+            "For CPL, you need 10+2 with Physics and Mathematics. NIOS is 100 percent accepted by DGCA. "
+            "Minimum age is 17 to start ground school, and 18 for the license. Would you like to know about medicals too?"
+        )
+    elif any(w in prompt_lower for w in ["cabin crew", "air hostess", "flight attendant"]):
+        return (
+            "Our Cabin Crew training program fee is Rs. 59,000 and the duration is 1 to 2 months. "
+            "Eligibility is 10+2 in any stream, age 18 to 27. Would you like to visit the campus to learn more?"
+        )
+    elif any(w in prompt_lower for w in ["thank", "bye", "goodbye", "exit", "shukriya"]):
+        return (
+            "Thank you for calling Airborne Aviation Academy! We will send all the details to your WhatsApp. "
+            "Have a wonderful day ahead. Clear skies! [EXIT]"
+        )
+
+    # Generic but history-aware fallback
+    if history and len(history) > 2:
+        last_assistant_msg = ""
+        for msg in reversed(history):
+            if msg.get("role") == "assistant":
+                last_assistant_msg = msg.get("content", "")
+                break
+        if "2,70,000" in last_assistant_msg or "fee" in last_assistant_msg.lower():
+            return (
+                "That is great to hear! Would you like to schedule a campus visit at our Ramphal Chowk, Dwarka centre? "
+                "You can see the A320 simulator and meet Captain Navrang Singh in person."
+            )
 
     return (
         "Thank you for contacting Airborne Aviation Academy, Dwarka. Captain Navrang Singh and our admissions team are here to help guide your pilot training journey. Which program or questions can I assist you with today?"

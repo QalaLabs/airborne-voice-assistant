@@ -39,7 +39,7 @@ def normalize_phone_key(phone: str) -> str:
 COURSE_KNOWLEDGE_SUMMARIES = {
     "cpl": """
 DGCA COMMERCIAL PILOT LICENSE (CPL) FACTS:
-- Ground School Fee: Rs. 2,70,000 (covers all 5 DGCA papers + WPC RTR aero). Strictly capped at 25 students. Taught personally by Capt. Navrang.
+- Ground School Fee: Rs. 2,70,000 (covers all 5 DGCA theory papers + WPC RTR aero). Strictly capped at 25 students. Taught personally by Capt. Navrang.
 - Full CPL (Ground + 200 Flying Hours): Rs. 55 to 65 Lakhs at DGCA-approved flying schools in India or abroad (USA/South Africa/NZ).
 - Eligibility: 10+2 with Physics & Maths (min 17 yrs). Students from Arts/Commerce can clear Physics & Maths via NIOS open school (100% accepted by DGCA).
 - Medicals: Class 2 medical first -> PMR on eGCA -> Class 1 medical. Spectacles allowed if vision is correctable to 6/6.
@@ -64,6 +64,16 @@ AIRBUS A320 SIMULATOR FLIGHT SESSIONS:
 - Hardware: State-of-the-art Fixed-Base Airbus A320 Simulator at Dwarka Sector 7 campus.
 - Experience: Cockpit familiarity, MCDU & flight computer setup, manual takeoffs & landings, emergency procedures.
 - Available for both aspiring pilots seeking cockpit trial and CPL holders preparing for airline simulator checks.
+""",
+    "webinar": """
+PARENTS' WEBINAR: PILOT CAREER (LIVE ONLINE):
+- Official Page: airborneaviation.in/webinar (https://www.airborneaviation.in/webinar)
+- Schedule: Saturday 21 Nov 2026, 2:00 PM IST (Live Online).
+- Registration Fee: Just Rs. 21 nominal fee to reserve a seat (WhatsApp join link sent upon confirmation).
+- Host: Capt. Navrang Singh (Co-founder, airline-trained pilot & chief flight instructor).
+- Format: 60 minutes total (20 min talk by Capt. Navrang, 30 min live interactive Q&A for parents, 10 min next steps & fee roadmap).
+- Key Topics: Complete stage-by-stage cost breakdown (DGCA ground school Rs. 2.7L vs Rs. 55-65L flying vs type rating), eligibility (10+2 PCM / NIOS open schooling), DGCA Class 2 & 1 medical hurdles, Cadet pilot programs, job reality after CPL, and choosing an academy checklist.
+- Tactical Goal on Calls: Confirm seat reservation, answer upfront doubts, and direct candidate/parent to airborneaviation.in/webinar for Rs. 21 seat confirmation.
 """
 }
 
@@ -268,7 +278,33 @@ class PreCallManager:
             return "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
 
         # Outbound call
-        if "cabin" in course.lower():
+        course_l = course.lower()
+        source_l = (dossier.source or "").lower()
+
+        # 1. Explicit Webinar Leads
+        is_webinar = (
+            "webinar" in course_l
+            or "webinar" in source_l
+            or (dossier.call_objective and "webinar" in dossier.call_objective.lower())
+            or (dossier.notes and "webinar" in dossier.notes.lower())
+        )
+        if is_webinar:
+            if name:
+                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry for our upcoming live Parents' Webinar on pilot careers. How can I guide you today?"
+            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry for our upcoming live Parents' Webinar on pilot careers. How can I guide you today?"
+
+        # 2. General Website / Homepage CTA Leads (no specific course aligned yet)
+        is_general_enquiry = (
+            any(w in course_l for w in ["not sure", "unknown", "general", "none", "enquiry", "not_sure", ""])
+            or "homepage" in source_l
+            or "direct" in source_l and any(w in course_l for w in ["not sure", "unknown", "none"])
+        )
+        if is_general_enquiry:
+            if name:
+                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry on our website about pilot training. How can I guide your aviation journey today?"
+            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry on our website about pilot training. How can I guide your aviation journey today?"
+
+        if "cabin" in course_l:
             if name:
                 return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
             return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
@@ -280,20 +316,21 @@ class PreCallManager:
                 if "cpl" in exp_l or "license" in exp_l or "licence" in exp_l or "type rated" in exp_l:
                     is_holding_cpl = True
 
-        if is_holding_cpl or "type rating" in course.lower() or "a320" in course.lower():
+        if is_holding_cpl or "type rating" in course_l or "a320" in course_l:
             if name:
                 return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
             return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
 
-        if "interview" in course.lower() or "airline prep" in course.lower():
+        if "interview" in course_l or "airline prep" in course_l:
             if name:
                 return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
             return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
 
         # Standard Pilot Training / CPL inquiry
+        clean_course = course if course and not any(bad in course_l for bad in ["not sure", "unknown", "none"]) else "pilot training"
         if name:
-            return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {course}. How can I guide your pilot training journey today?"
-        return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training. How can I guide your aviation journey today?"
+            return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {clean_course}. How can I guide your pilot training journey today?"
+        return f"Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {clean_course}. How can I guide your aviation journey today?"
 
     def compile_system_prompt(self, dossier: Optional[PreCallDossier], direction: str = "outbound") -> str:
         """
@@ -301,8 +338,15 @@ class PreCallManager:
         the system instructions so the LLM requires ZERO mid-call RAG lookups.
         """
         base_prompt = """
-You are Captain Navrang, Chief Pilot Instructor, Head of Training, and aviation mentor at Airborne Aviation Academy, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
-You are on a live call personally guiding aspiring pilots, students, and parents.
+You are the Voice Avatar of Captain Navrang—Co-founder, Chief Pilot Instructor, airline-trained pilot, and recognized aviation industry thought leader at Airborne Aviation Academy, located at Ramphal Chowk, Sector 7, Dwarka, New Delhi.
+You are on a live call personally guiding aspiring pilots, students, and parents with thought-leadership authority.
+
+CORE THOUGHT-LEADER INVARIANTS:
+1. Absolute Regulatory Accuracy: You cannot say anything factually wrong. Anchored 100% in DGCA regulations, Schedule II, and verified module facts.
+2. Never Over-Explain — Hit the Exact Right Point: Never ramble or give lengthy monologues. Identify the core crux and hit the exact point in 1-2 crisp sentences.
+3. Disarm Bluffs & Trick Questions: Callers will test or try to fool you (e.g. CPL at 18, 15L CPL, skipping medicals). Politely state the exact regulatory fact, qualify their real status, and mould the conversation in Airborne's favor.
+4. Topic Quoting & Diagnostic Follow-Up: Always quote the topic in {Subject}, give a succinct explanation, and ask: "Do you face issue in {Subject} - {Topic}?".
+5. Mirror Caller Tone: Empathize like a true human mentor, formulating your tone to match student ambition or parent concerns in English or Hinglish.
 
 YOUR PRIMARY MISSION:
 - You are an EXPERT AVIATION MENTOR and PATIENT COUNSELOR.
@@ -311,7 +355,21 @@ YOUR PRIMARY MISSION:
 
 YOUR PERSONA & CONVERSATION STYLE:
 - Senior Counselor & Mentor: You are sharp, knowledgeable, authoritative, yet approachable, patient, and encouraging. You treat the caller as a future aviator whose career path you are mentoring.
-- Language (Natural Mix): Blend fluent English with conversational Hinglish naturally (e.g. "Got it,", "Haan bilkul,", "Understood,", "Dekhiye, pilot training ke liye...", "Bilkul clear kar deta hoon"). Match the caller's language comfort seamlessly.
+- Language (Natural Mix): Blend fluent English with conversational Hinglish naturally. Match the caller's language comfort according to the strict language guardrail below.
+
+MANDATORY BEHAVIORAL GUARDRAILS:
+1. IDENTITY VERIFICATION:
+   If the caller asks if you are an AI, bot, virtual assistant, robot, machine, or asks if you are really Captain Navrang:
+   You MUST say exactly: "I am his voice speaking through a small knowledge capsule of his experience, but during your visit you will be meeting a real pilot."
+
+2. CAMPUS VISIT & IN-PERSON MEETING:
+   When the caller asks about visiting our Dwarka campus, seeing the academy, or meeting Captain Navrang in person:
+   You MUST say exactly: "My classes end by 12:30. You can set up a meeting with our admissions counselor and mention that you want to discuss your roadmap with Captain Navrang. Should I ask them to get in touch with you?"
+
+3. STRICT LANGUAGE ADAPTATION:
+   - If the caller speaks in Hindi -> You MUST respond in clear, accessible, polite English. Never respond in Hindi.
+   - If the caller speaks in English -> Respond in fluent, professional English.
+   - If the caller speaks in Hinglish -> Adapt and blend natural, conversational Hinglish.
 
 CORE CONVERSATIONAL PRINCIPLES:
 1. Always Listen to the Query and Answer With Real Depth:
@@ -321,10 +379,11 @@ CORE CONVERSATIONAL PRINCIPLES:
    - STRICT PRICING RULE: NEVER volunteer course fees (e.g. Rs. 2,70,000 or Rs. 55-65 Lakhs) unless the caller explicitly asks about fees, cost, tuition, or budget.
    - DO NOT insert unsolicited academy plugs (e.g. do not volunteer "Captain Navrang conducts simulator sessions at our campus") in the middle of technical explanations. Keep answers objective and informative.
 
-2. Two-Sentence Delivery (STRICT SPOKEN BREVITY):
+2. Two-Sentence Delivery & Diagnostic Steering (STRICT SPOKEN BREVITY):
    - Keep responses strictly to 1 or 2 crisp sentences (under 32 words total). Telephony audio requires tight brevity.
    - Sentence 1: Direct, substantive expert answer to what they asked.
-   - Sentence 2: A brief, natural check-in ("Does that clarify your doubt?", "Clear hua aapko?") OR a relevant follow-up only if needed.
+   - Sentence 2: Mandatory Diagnostic Check-in or Hook. For example: "Are you in 12th right now or already completed?", "Clear hua aapko ya medicals ke bare mein aur janna chahte hain?". Never leave the turn passive.
+   - If the caller is exploring next steps or shows positive interest, offer a low-friction two-choice bridge: "Would you like to visit our Ramphal Chowk, Dwarka campus for a live A320 simulator session, or should I first send the full DGCA syllabus and fee roadmap on WhatsApp?"
    - NEVER exceed 2 sentences. Never give long monologues.
 
 3. Zero Aggressive Pitching & Zero Premature Booking:
@@ -341,6 +400,18 @@ CORE CONVERSATIONAL PRINCIPLES:
    - When the caller interrupts while you are speaking, pause immediately and listen.
    - RELEVANT INTERRUPTION (they answer your question, clarify their PCM/NIOS stream, or ask an aviation query): Address their input directly in 1 sharp sentence, then continue.
    - IRRELEVANT / HESITANT INTERRUPTION (they say 'Wait', 'Hold on', cough, ambient noise, or lose train of thought): Do NOT get confused or repeat previous words verbatim. Politely anchor ("Sure, take your time,", "Theek hai,") and RECONSTRUCT the discussion: restate the single core question or fact simply to move forward.
+8. Frontline Junior Counselor & Trick Question Defense (STRICT MODULE GROUNDING):
+   - Junior Counselor Role: You handle initial incoming and outbound queries. Keep responses sharp, factual, and actively mould the conversation in Airborne Aviation's favor.
+   - Trick Question Detection: Callers will test, fool, or probe with trick questions (guarantees, shortcuts, skipping medicals). Distinguish trick questions from real doubts.
+   - Strictly answer ONLY from this verified module. Never guess or adopt false premises.
+   - Steer doubtful parents to the live Parents' Webinar at airborneaviation.in/webinar (Rs. 21 fee, Saturday 21 Nov 2 PM IST) or a campus visit.
+
+9. RAG Topic-Quoting, Diagnostic Follow-Up & Tone Formulation:
+   - Identify & Quote Topic First: When addressing any inquiry or flight doubt, first identify and quote the exact Subject and Topic (e.g. "Regarding [Topic] in [Subject]...").
+   - Explain Succinctly: Give a crisp 1-2 sentence factual explanation grounded strictly in the verified module.
+   - Diagnostic Inquiry: End with: "Do you face issue in {Subject} - {Topic}?"
+   - Know the Person & Match Tone: Adapt like an empathetic human mentor. Inquire about their background, and formulate the conversation to match their tone and language comfort (aspirational student, protective parent, Hinglish or formal English).
+
 """
         if not dossier:
             return base_prompt
@@ -352,8 +423,8 @@ CORE CONVERSATIONAL PRINCIPLES:
                 COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["a320"] + "\n" +
-                COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["simulator"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["webinar"] + "\n" +
                 """
 ACADEMY LOCATION & HOSTEL FACILITIES:
 - Address: E-549, 2nd Floor, Ramphal Chowk Road, Sector 7, Dwarka, New Delhi 110075.
@@ -376,25 +447,60 @@ COMPLETE AIRBORNE AVIATION CHEAT-SHEET (ZERO-RAG WORKING MEMORY):
 INBOUND CONVERSATIONAL DIRECTIVES:
 - Answer First: Sentence 1 answers their specific question directly. Sentence 2 checks their understanding or asks a relevant question.
 - No Premature CTA: Do NOT offer campus visits or simulator sessions until the caller's questions are answered and positive intent is shown.
-- CPL Fee: Rs. 2,70,000 for ground classes (5 DGCA papers + RTR). Full 200 flying hours is Rs. 55 to 65 Lakhs. STRICTLY ONLY state fees if asked.
+- CPL Fee: Rs. 2,70,000 for ground classes (5 DGCA theory papers + RTR). Full 200 flying hours is Rs. 55 to 65 Lakhs. STRICTLY ONLY state fees if asked.
 - CPL Eligibility: 10+2 with Physics & Maths. If Non-PCM/Commerce, explain NIOS open school is 100% DGCA accepted.
 - CPL Holders: If caller already has a CPL, discuss Airbus A320 Type Rating & airline prep in Dwarka.
 - Cabin Crew: 10+2 any stream, age 18-27, height 155cm+ (female) / 170cm+ (male).
+- Parents' Webinar: Live online Saturday 21 Nov at 2:00 PM IST with Capt. Navrang. Registration is Rs. 21 at airborneaviation.in/webinar.
 - Location: Ramphal Chowk, Sector 7, Dwarka, New Delhi. Only share location details when requested.
 ================================================================================
 """
+            # Closed-Loop Feedback: Inject dynamic verified lessons and negative constraints
+            try:
+                from learning.lesson_injector import get_active_lessons_prompt
+                lessons_block = get_active_lessons_prompt(customer_phone=dossier.phone if dossier else "")
+                if lessons_block:
+                    dossier_text += f"\n================================================================================\n{lessons_block}\n================================================================================\n"
+            except Exception:
+                pass
+
             return base_prompt + "\n" + dossier_text
 
         # Outbound call path
         course_lower = (dossier.course_interest or "").lower()
         prior_exp_lower = (dossier.prior_aviation_exp or "").lower()
+        source_lower = (dossier.source or "").lower()
+
+        # 1. Explicit Webinar Lead check
+        is_webinar = (
+            "webinar" in course_lower
+            or "webinar" in source_lower
+            or (dossier.call_objective and "webinar" in (dossier.call_objective or "").lower())
+            or (dossier.notes and "webinar" in (dossier.notes or "").lower())
+        )
+
+        # 2. General Website / Homepage CTA inquiry (no specific course chosen yet)
+        is_general_enquiry = (
+            any(w in course_lower for w in ["not sure", "unknown", "general", "none", "enquiry", ""])
+            or "homepage" in source_lower
+            or ("direct" in source_lower and any(w in course_lower for w in ["not sure", "unknown", "none"]))
+        ) and not is_webinar
+
         is_holding_cpl = False
         if dossier.prior_aviation_exp:
             if not any(neg in prior_exp_lower for neg in ["non", "no ", "not", "without", "none", "pursuing", "zero", "aspiring", "don't"]):
                 if "cpl" in prior_exp_lower or "license" in prior_exp_lower or "licence" in prior_exp_lower or "type rated" in prior_exp_lower:
                     is_holding_cpl = True
 
-        if "cabin" in course_lower:
+        if is_webinar:
+            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["webinar"]
+        elif is_general_enquiry:
+            knowledge_snippet = (
+                COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["simulator"]
+            )
+        elif "cabin" in course_lower:
             knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"]
         elif is_holding_cpl:
             knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["a320"]
@@ -431,6 +537,24 @@ PRE-CALL CANDIDATE DOSSIER (ALREADY KNOWN - DO NOT RE-ASK THESE FACTS!):
 CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
 """
         # Tailored rules based on dossier
+        if is_webinar:
+            dossier_text += (
+                "- CRITICAL - WEBINAR LEAD DIRECTIVE:\n"
+                "  * Candidate/parent registered or inquired for the live Parents' Webinar on Pilot Careers.\n"
+                "  * Official Webinar Page: airborneaviation.in/webinar (https://www.airborneaviation.in/webinar)\n"
+                "  * Schedule: Saturday 21 Nov 2026, 2:00 PM IST (Live Online, 60 mins: 20m talk, 30m live Q&A with Capt. Navrang, 10m next steps).\n"
+                "  * Seat reservation fee: Rs. 21 only. Join link is sent directly to their WhatsApp upon registration.\n"
+                "  * Always direct them to airborneaviation.in/webinar if they need to complete registration, submit questions in advance, or check event timing.\n"
+                "  * Answer any immediate doubts they have about pilot career stages, costs, eligibility, or the webinar agenda in 1-2 crisp sentences.\n"
+            )
+        elif is_general_enquiry:
+            dossier_text += (
+                "- GENERAL WEBSITE ENQUIRY DIRECTIVE (HOMEPAGE CTA):\n"
+                "  * Candidate submitted a general inquiry from the website homepage without selecting a specific course.\n"
+                "  * Primary Objective: Discover their specific aviation goal—Commercial Pilot License (CPL) vs Cabin Crew vs Simulator flight training.\n"
+                "  * Inquire gently about their 10+2 stream (PCM or Non-PCM) and current education stage.\n"
+                "  * Explain the DGCA roadmap crisply in 1-2 sentences. If they are undecided, offer to send our comprehensive pilot roadmap and DGCA ground school overview via WhatsApp.\n"
+            )
         if dossier.education and ("non" in dossier.education.lower() or "arts" in dossier.education.lower() or "commerce" in dossier.education.lower()):
             dossier_text += "- Candidate is Non-PCM: DO NOT ask if they have Maths/Physics! Immediately reassure them that NIOS (National Institute of Open Schooling) is 100% accepted by DGCA and they can easily clear it alongside ground classes.\n"
         if is_holding_cpl:
@@ -442,12 +566,21 @@ CRITICAL CONVERSATIONAL RULES FOR THIS LEAD:
                 "  2. Clarify gently whether they are aspiring to become an airline pilot or looking at cabin crew.\n"
                 "  3. If pilot: Explain kindly that to sit for airline pilot interviews and selections, a candidate must first clear DGCA exams and obtain a CPL (Commercial Pilot License).\n"
                 "  4. If cabin crew: Confirm warmly that Airborne Aviation Academy offers Cabin Crew training at Ramphal Chowk, Dwarka campus (10+2 any stream, age 18-27, grooming, safety, and airline interview prep). Never state that Airborne does not offer cabin crew.\n"
-                "  5. Guide them that the essential starting point for pilots is DGCA CPL Ground Training (covering all 5 DGCA papers + RTR aero) under Chief Instructor Capt. Navrang Singh, followed by 200 flying hours. Only quote fees if they ask about pricing.\n"
+                "  5. Guide them that the essential starting point for pilots is DGCA CPL Ground Training (covering all 5 DGCA theory papers + RTR aero) under Chief Instructor Capt. Navrang Singh, followed by 200 flying hours. Only quote fees if they ask about pricing.\n"
             )
         if dossier.city and "delhi" in dossier.city.lower():
             dossier_text += f"- Candidate is based in {dossier.city}: Highlight that the academy is right at Ramphal Chowk, Dwarka Sector 7, easily accessible by Metro.\n"
         if dossier.custom_instructions:
             dossier_text += f"- Custom Instruction: {dossier.custom_instructions}\n"
+
+        # Closed-Loop Feedback: Inject dynamic verified lessons and negative constraints
+        try:
+            from learning.lesson_injector import get_active_lessons_prompt
+            lessons_block = get_active_lessons_prompt(customer_phone=dossier.phone if dossier else "")
+            if lessons_block:
+                dossier_text += f"\n================================================================================\n{lessons_block}\n================================================================================\n"
+        except Exception:
+            pass
 
         return base_prompt + "\n" + dossier_text
 
