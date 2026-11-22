@@ -1,8 +1,13 @@
 import requests
 import json
 import re
+import sqlite3
+from pathlib import Path
 import config
 import supabase_client
+
+# Local Textbook RAG Database Path (13 DGCA Textbooks, 9,228+ chunks)
+AVIATION_RAG_DB_PATH = Path(__file__).resolve().parent / "data" / "aviation_rag.db"
 
 # =====================================================================
 # 📚 AIRBORNE AVIATION GROUND-TRUTH KNOWLEDGE CORPUS (from airborneaviation.in)
@@ -335,6 +340,63 @@ def search_local_knowledge(query: str, top_k: int = 3) -> str:
         "- Campus Address: E-549, 2nd Floor, Ramphal Chowk, Sector 7, Dwarka, Delhi. Phone: +91 9953 777 320."
     )
 
+def search_textbook_knowledge(query: str, top_k: int = 2) -> list:
+    """
+    Executes high-speed hybrid BM25 full-text search against the 13 DGCA official aviation textbooks
+    (9,228+ chunks from Oxford Meteorology, RK Bali Regulations, IC Joshi, General Nav, Radio Nav,
+    Flight Planning, Instrumentation, Principles of Flight, Powerplant, Systems, Electrics, Performance, RTR).
+    """
+    if not AVIATION_RAG_DB_PATH.exists():
+        return []
+
+    STOPWORDS = {
+        "what", "is", "the", "and", "or", "to", "for", "in", "on", "a", "an", "of", "how",
+        "does", "do", "can", "tell", "me", "about", "give", "please", "with", "from",
+        "this", "that", "it", "are", "be", "have", "has", "i", "you", "we", "they",
+        "explain", "difference", "between", "when", "which", "where", "why", "who"
+    }
+    words = re.sub(r'[^a-zA-Z0-9\s]', '', query).split()
+    cleaned_words = [w for w in words if len(w) > 2 and w.lower() not in STOPWORDS]
+    if not cleaned_words:
+        cleaned_words = [w for w in words if len(w) > 2]
+    if not cleaned_words:
+        return []
+
+    match_query = " OR ".join([f'"{w}"*' for w in cleaned_words[:8]])
+    
+    sql = """
+        SELECT 
+            c.book_title,
+            c.subject,
+            c.page_number,
+            c.text,
+            bm25(chunks_fts) as rank_score
+        FROM chunks_fts f
+        JOIN chunks c ON c.id = f.rowid
+        WHERE chunks_fts MATCH ?
+        ORDER BY rank_score ASC LIMIT ?;
+    """
+    results = []
+    try:
+        with sqlite3.connect(str(AVIATION_RAG_DB_PATH), timeout=5.0) as con:
+            rows = con.execute(sql, (match_query, top_k * 2)).fetchall()
+            for row in rows:
+                text_sample = row[3].strip()
+                if ". . . ." in text_sample or text_sample.count("....") >= 2:
+                    continue
+                results.append({
+                    "book_title": row[0],
+                    "subject": row[1],
+                    "page_number": row[2],
+                    "text": row[3]
+                })
+                if len(results) >= top_k:
+                    break
+    except Exception as e:
+        print(f"Notice: Textbook RAG search notice: {e}")
+        
+    return results
+
 def get_embedding(text: str, model: str = "text-embedding-004"):
     """
     Generate vector embedding using Google Gemini API (if configured).
@@ -359,11 +421,28 @@ def get_embedding(text: str, model: str = "text-embedding-004"):
 
 def query_rag(query: str, threshold: float = 0.5, limit: int = 3) -> str:
     """
-    Main RAG query interface:
-    1. First attempts vector similarity search via PostgreSQL / Cloud SQL pgvector.
-    2. If vector DB is unavailable or returns no matches, seamlessly uses the high-precision
-       in-memory Airborne Aviation knowledge engine derived directly from airborneaviation.in.
+    Unified RAG query interface across BOTH Academy Knowledge & 13 DGCA Official Textbooks:
+    1. Retrieves verified textbook knowledge chunks (Oxford, RK Bali, IC Joshi, Nav, Tech General).
+    2. Retrieves academy ground-truth (fees, webinar, admissions, Capt. Navrang).
+    3. Combines both so the agent has the complete answer for any question asked.
     """
+    contexts = []
+
+    # 1. Check Textbook Knowledge Base (9,228+ chunks across all 13 books)
+    textbook_matches = search_textbook_knowledge(query, top_k=2)
+    if textbook_matches:
+        tb_snippets = [
+            f"=== 📖 VERIFIED DGCA TEXTBOOK SOURCE: {m['book_title']} (Subject: {m['subject']}, Page {m['page_number']}) ===\n{m['text']}"
+            for m in textbook_matches
+        ]
+        contexts.append("\n\n".join(tb_snippets))
+
+    # 2. Check Academy & Admissions Knowledge Base (airborneaviation.in)
+    academy_context = search_local_knowledge(query, top_k=limit)
+    if academy_context:
+        contexts.append(academy_context)
+
+    # 3. Optional remote vector match (Cloud SQL pgvector) if available
     try:
         query_vector = get_embedding(query)
         if query_vector:
@@ -373,14 +452,16 @@ def query_rag(query: str, threshold: float = 0.5, limit: int = 3) -> str:
                 match_count=limit
             )
             if matches and len(matches) > 0:
-                context_blocks = [doc.get("content", "") for doc in matches if doc.get("content")]
-                if context_blocks:
-                    return "\n---\n".join(context_blocks)
+                remote_blocks = [doc.get("content", "") for doc in matches if doc.get("content")]
+                if remote_blocks:
+                    contexts.insert(0, "\n---\n".join(remote_blocks))
     except Exception as e:
-        print(f"Notice: Vector RAG fallback triggered: {e}")
+        pass
 
-    # Fallback to local ground-truth knowledge base
-    return search_local_knowledge(query, top_k=limit)
+    if contexts:
+        return "\n\n========================================\n\n".join(contexts)
+
+    return academy_context or "Airborne Aviation Academy: DGCA Pilot Ground Classes & Flight Training."
 
 def ingest_text_chunk(text: str, metadata: dict = None):
     """

@@ -79,7 +79,7 @@ AGENT_TOKEN = config.AGENT_TOKEN or os.getenv("AGENT_TOKEN", "")
 # Phone audio is narrowband; Piopiy docs recommend 16 kHz PCM to avoid heavy resampling latency.
 TTS_SAMPLE_RATE = int(os.getenv("WORKER_TTS_SAMPLE_RATE", "16000"))
 # Cellular ring-trip clicks / carrier spikes must not cancel the greeting before the caller hears it.
-BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "1.2"))
+BARGE_IN_GRACE_SECS = float(os.getenv("BARGE_IN_GRACE_SECS", "2.0"))
 
 
 class GraceWindowInterruptionStrategy(VADUserTurnStartStrategy):
@@ -502,6 +502,20 @@ PHONETIC_REPLACEMENTS = {
     "cpl license": "Commercial Pilot License (CPL)",
     "type rated": "A320 Type Rating",
     "type rating": "A320 Type Rating",
+    "tight fit": "A320 Type Rating",
+    "ap 20": "A320",
+    "a-t20": "A320",
+    "at20": "A320",
+    "isline": "airline interview",
+    "ramphal chop": "Ramphal Chowk",
+    "captain namran": "Captain Navrang",
+    "capt namran": "Captain Navrang",
+    "capt navrant": "Captain Navrang",
+    "captain navrant": "Captain Navrang",
+    "gordon": "Captain Navrang",
+    "abram": "Captain Navrang",
+    "g-cion": "DGCA",
+    "dgia": "DGCA",
 }
 
 class SharedModelWhisperSTTService(WhisperSTTService if WhisperSTTService is not None else object):
@@ -762,8 +776,6 @@ async def create_session(
         greeting=session_greeting,
         idle_timeout_secs=90,
     )
-    if session_greeting and hasattr(voice_agent, "_messages") and isinstance(voice_agent._messages, list):
-        voice_agent._messages.append({"role": "assistant", "content": session_greeting})
 
     llm_params = GoogleLLMService.InputParams(
         thinking=GoogleLLMService.ThinkingConfig(thinking_budget=0),
@@ -803,13 +815,13 @@ async def create_session(
     # Tuned to prevent listening to soft voices / whispers and allow natural caller pausing without cutoff
     vad_params = VADParams(
         start_secs=0.20,
-        stop_secs=0.80,
-        confidence=0.70,
-        min_volume=0.60
+        stop_secs=0.90,
+        confidence=0.75,
+        min_volume=0.70
     ) if VADParams else None
     vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
 
-    # 3. Fresh TTS FrameProcessor reading from shared cached PCM pool
+    # 3. Fresh TTS FrameProcessor with Google Cloud Native Neural Fallback
     if config.USE_ELEVENLABS and config.ELEVENLABS_API_KEY:
         tts = FastStreamingElevenLabsTTS(
             api_key=config.ELEVENLABS_API_KEY,
@@ -817,8 +829,7 @@ async def create_session(
             sample_rate=TTS_SAMPLE_RATE,
         )
     else:
-        tts = FastEdgeTTSService(
-            voice="en-IN-PrabhatNeural",
+        tts = GoogleCloudTTSService(
             sample_rate=TTS_SAMPLE_RATE,
         )
 
@@ -855,8 +866,6 @@ async def create_session(
     # Post-call processing & CRM synchronization
     try:
         call_history = []
-        if session_greeting:
-            call_history.append({"role": "assistant", "content": session_greeting})
 
         if voice_agent.context_aggregator:
             ctx = None
@@ -887,7 +896,15 @@ async def create_session(
                         else:
                             text = str(content).strip()
                         if text and not text.startswith("System:"):
-                            call_history.append({"role": normalized_role, "content": text})
+                            # Avoid consecutive identical duplicate messages
+                            if not call_history or call_history[-1].get("content") != text:
+                                call_history.append({"role": normalized_role, "content": text})
+
+        if not call_history and session_greeting:
+            call_history.append({"role": "assistant", "content": session_greeting})
+        elif call_history and session_greeting:
+            if call_history[0].get("content") != session_greeting:
+                call_history.insert(0, {"role": "assistant", "content": session_greeting})
 
         if len(call_history) > 1 and customer_phone != "+910000000000":
             import database

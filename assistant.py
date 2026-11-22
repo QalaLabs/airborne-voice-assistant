@@ -26,14 +26,37 @@ CONVERSATIONAL_FILLERS = {
 }
 
 AVIATION_KEYWORDS = {
+    # Licensing, Academy & Operations
     "cpl", "atpl", "rtr", "ground", "class", "classes", "fee", "fees", "cost", "price",
     "duration", "batch", "batches", "simulator", "sim", "airbus", "a320", "fbs",
     "cadet", "airline", "interview", "gd", "pi", "psychomotor", "cass", "compass",
     "adapt", "cabin", "crew", "flight", "attendant", "ppl", "multi-engine", "mer",
     "medical", "medicals", "class 1", "class 2", "eligibility", "maths", "physics",
     "nios", "age", "navrang", "modassir", "dwarka", "location", "address", "hostel",
-    "syllabus", "exam", "dgca", "webinar", "webinars", "parents webinar", "live webinar",
-    "online session", "21 nov"
+    "syllabus", "exam", "exams", "dgca", "webinar", "webinars", "parents webinar", "live webinar",
+    "online session", "21 nov", "book", "books", "textbook", "notes",
+    # 13 Official DGCA Textbooks & Technical Subjects
+    "oxford", "rk bali", "ic joshi", "principles of flight", "aerodynamics", "lift", "drag",
+    "thrust", "weight", "stall", "stalling", "angle of attack", "aoa", "camber", "airfoil",
+    "vortex", "vortices", "wingtip", "induced drag", "adverse yaw", "rudder", "aileron",
+    "dihedral", "lateral stability", "center of pressure", "ground effect", "mach", "transonic",
+    # Meteorology
+    "met", "meteorology", "atmosphere", "troposphere", "tropopause", "stratosphere", "lapse rate",
+    "dalr", "salr", "elr", "inversion", "pressure", "altimeter", "qnh", "qfe", "qne",
+    "coriolis", "geostrophic", "buy ballot", "dew point", "relative humidity", "cloud", "clouds",
+    "cumulonimbus", "cb", "thunderstorm", "microburst", "icing", "clear ice", "rime ice",
+    "carburetor", "carb heat", "fog", "radiation fog", "advection fog", "monsoon", "western disturbance",
+    "norwester", "kalbaisakhi", "andhi", "metar", "taf", "cavok", "rvr",
+    # Air Regulations & ATC
+    "regulations", "rule 7", "rule 67a", "rule 30", "car", "right of way", "head on", "converging",
+    "overtaking", "vfr", "ifr", "special vfr", "semi-circular", "cruising level", "transition altitude",
+    "transition level", "airspace", "squawk", "transponder", "7500", "7600", "7700", "fdtl",
+    "accident", "incident", "light signals",
+    # Navigation, Instruments & Powerplant
+    "nav", "navigation", "vor", "dme", "ils", "radar", "1 in 60", "drift", "pitot", "static",
+    "airspeed", "ias", "tas", "heading", "track", "gyro", "magneto", "engine", "engines",
+    "turbofan", "bypass", "spark plug", "hydraulic", "accumulator", "electrics", "busbar",
+    "mayday", "pan pan", "phraseology"
 }
 
 HUMAN_TRANSFER_PHRASES = [
@@ -258,6 +281,10 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
             history.append({"role": "user", "content": "[Silence/Unrecognized Input]"})
             history.append({"role": "assistant", "content": response_text})
             supabase_client.save_conversation_history(phone, history, direction)
+            try:
+                automation.trigger_dropoff_recovery(phone)
+            except Exception as ae:
+                print(f"Notice triggering dropoff recovery on silence: {ae}")
             audio_url = speak_and_get_url(response_text.replace("[EXIT]", "").strip())
             return audio_url, True
 
@@ -297,14 +324,16 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
         audio_url = speak_and_get_url(response_text.replace("[EXIT]", "").strip())
         return audio_url, True
 
-    # 6.5 Deterministic Persona & Behavioral Guardrails (Identity, Campus Visit, Language)
+    # 6.5 Deterministic Persona & Behavioral Guardrails (Identity, Campus Visit, Language, AMD, Audibility)
     override_resp, enforced_lang, guardrail_meta = guardrails.evaluate_all_guardrails(caller_input, phone=phone)
     if override_resp:
+        should_hang_up = bool(re.search(r'\[exit\]', override_resp, flags=re.IGNORECASE))
+        clean_override = re.sub(r'\[exit\]\.?', '', override_resp, flags=re.IGNORECASE).strip()
         history.append({"role": "user", "content": caller_input})
         history.append({"role": "assistant", "content": override_resp})
         supabase_client.save_conversation_history(phone, history, direction)
-        audio_url = speak_and_get_url(override_resp)
-        return audio_url, False
+        audio_url = speak_and_get_url(clean_override)
+        return audio_url, should_hang_up
 
     # 7. Pre-call Dossier & Selective Knowledge Retrieval
     import precall_manager
@@ -382,34 +411,26 @@ def clear_session(phone: str):
 _active_pipelines = set()
 _pipelines_lock = threading.Lock()
 
-def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provider_call_id: str = None):
+def analyze_call_transcript_and_qualify(
+    transcript: str, 
+    phone: str, 
+    direction: str = "outbound", 
+    recording_url: str = "", 
+    gcs_recording_url: str = "", 
+    provider_call_id: str = None
+) -> dict:
     """
-    Asynchronous post-call processor.
-    1. Archives call recording to Google Cloud Storage.
-    2. Extracts lead qualifiers, course interest, and callback intent using LLM.
-    3. Updates CRM (leads & lead_activities) directly in Cloud SQL.
-    4. Triggers secondary automations (WhatsApp & CRM sync).
-    Guarded against duplicate / concurrent pipeline execution.
+    Core transcript qualifying & CRM action execution engine.
+    Parses conversation against all CRM statuses, determines actions (counselor assignment,
+    follow-up setup, meeting scheduling), updates Cloud SQL leads/activities,
+    notifies admin webhook, and triggers WhatsApp automations.
     """
-    cleaned_phone = phone.replace(" ", "").replace("-", "")
-    with _pipelines_lock:
-        if cleaned_phone in _active_pipelines:
-            print(f"Post-Call: Pipeline already executing for {cleaned_phone}. Skipping duplicate trigger.")
-            return
-        _active_pipelines.add(cleaned_phone)
-    try:
-        print(f"Post-Call: Starting pipeline for {phone}...")
-        transcript = get_transcript_string(phone)
-        if not transcript:
-            print(f"Post-Call: Empty transcript or session already processed for {phone}. Skipping processing.")
-            return
+    if not transcript or not str(transcript).strip():
+        print(f"Post-Call: Empty transcript for {phone}. Skipping qualification.")
+        return {}
 
-        # 1. Archive call recording to Google Cloud Storage bucket
-        import storage_service
-        gcs_recording_url = storage_service.upload_call_recording_from_url(
-            recording_url, phone.replace("+", "")
-        ) if recording_url else ""
-            
+    cleaned_phone = phone.replace(" ", "").replace("-", "")
+    try:
         parser_prompt = f"""
         You are an automated CRM lead parser for Airborne Aviation Academy (Ramphal Chowk, Dwarka, Delhi).
         Review the telephone call transcript below and extract all lead details to match our CRM Add New Lead form:
@@ -441,10 +462,37 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
         12. callback_requested: true if caller asked to be called back later, else false.
         13. callback_time: estimated ISO timestamp or description if callback requested, else null.
         14. notes: A concise CRM note summarizing their profile, verification answers, and requested next steps.
+        15. crm_status: The canonical CRM lifecycle status matching the candidate's journey:
+            - 'INTERESTED': Caller asked questions about courses, syllabus, fees, batches, or agreed to next steps/visit.
+            - 'FOLLOW_UP': Caller requested a callback ("call me tomorrow", "call later", "in class/driving"), or line was busy/missed.
+            - 'COUNSELED': Full in-depth guidance on ground school, DGCA exams, medicals, NIOS, or flight training was delivered during the call.
+            - 'APPLICATION_SUBMITTED': Caller confirmed they registered for webinar (Rs. 21) or submitted academy application.
+            - 'CONVERTED': Enrolled student (fees paid).
+            - 'LOST': Caller is disqualified, no longer interested, wrong number, or seeking immediate employment instead of training.
+            - 'CONTACTED': Call connected and basic conversation held, but caller was neutral, indecisive, or exploring without commitment.
+            - 'NEW': Call did not connect or no meaningful conversation took place.
+        16. lost_reason: If crm_status is 'LOST', specify the exact disqualification reason:
+            - 'NOT_ELIGIBLE': Under 17, non-PCM unwilling to do NIOS, or failed DGCA medical standards.
+            - 'PRICE_HIGH': Tuition / flying fees beyond budget.
+            - 'LOCATION_OUT_OF_SCOPE': Unable to attend Dwarka Ramphal Chowk campus or relocate.
+            - 'JOB_SEEKER': Seeking direct job/airline hiring instead of academy training.
+            - 'NOT_INTERESTED': Confirmed they have dropped aviation plans.
+            - 'INVALID_NUMBER': Wrong person / wrong number.
+            - 'LANGUAGE_BARRIER': Language communication impossible.
+            Or null if not LOST.
+        17. assign_counselor: true if the candidate needs an admissions counselor assigned (e.g., requested guidance, booked visit/call, or showed positive interest), else false.
+        18. counselor_assignment_reason: Reason for counselor assignment (e.g., 'Candidate requested 1-on-1 guidance for CPL ground school', 'Campus visit scheduled').
+        19. followup_required: true if a follow-up call is needed, else false.
+        20. followup_time: Date/time for the follow-up (e.g., 'Tomorrow 4 PM', 'Monday 11 AM') or null.
+        21. followup_notes: Specific topics or questions to cover during the follow-up.
+        22. meeting_scheduled: true if an in-person campus visit or formal counselling meeting was agreed, else false.
+        23. meeting_time: Confirmed date/time for the meeting (e.g., 'Tomorrow 3 PM', 'Saturday 11 AM') or null.
+        24. meeting_type: 'CAMPUS_VISIT' (for Dwarka Ramphal Chowk visit), 'ONLINE_COUNSELLING', or 'WEBINAR'.
+        25. meeting_notes: Meeting agenda and candidate requirements.
 
         Output ONLY as a valid JSON object. Do not include markdown wraps or explanations.
         Example output format:
-        {{"name": "Aayush", "email": null, "course_interest": "DGCA CPL Ground Classes", "user_query": "Inquired about CPL fees and medicals", "is_18_above": true, "city_or_location": "Dwarka Sector 7", "confirmed_education_institute": true, "open_to_ramphal_chowk": true, "booking_intent": "Campus Visit at Ramphal Chowk", "scheduled_time": "Tomorrow 4 PM", "classification": "Hot", "callback_requested": false, "callback_time": null, "notes": "Candidate Aayush, age 18+, confirmed aware that Airborne is an educational academy. Lives in Dwarka and open to Ramphal Chowk campus. Booked campus visit tomorrow at 4 PM."}}
+        {{"name": "Aayush", "email": null, "course_interest": "DGCA CPL Ground Classes", "user_query": "Inquired about CPL fees and medicals", "is_18_above": true, "city_or_location": "Dwarka Sector 7", "confirmed_education_institute": true, "open_to_ramphal_chowk": true, "booking_intent": "Campus Visit at Ramphal Chowk", "scheduled_time": "Tomorrow 4 PM", "classification": "Hot", "callback_requested": false, "callback_time": null, "notes": "Candidate Aayush, age 18+, confirmed aware that Airborne is an educational academy. Lives in Dwarka and open to Ramphal Chowk campus. Booked campus visit tomorrow at 4 PM.", "crm_status": "INTERESTED", "lost_reason": null, "assign_counselor": true, "counselor_assignment_reason": "Booked campus visit and simulator session at Ramphal Chowk", "followup_required": false, "followup_time": null, "followup_notes": null, "meeting_scheduled": true, "meeting_time": "Tomorrow 4 PM", "meeting_type": "CAMPUS_VISIT", "meeting_notes": "A320 simulator demo & 1-on-1 ground school roadmap discussion"}}
 
         TRANSCRIPT:
         {transcript}
@@ -469,7 +517,18 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
             "classification": "Cold",
             "callback_requested": False,
             "callback_time": None,
-            "notes": None
+            "notes": None,
+            "crm_status": "CONTACTED",
+            "lost_reason": None,
+            "assign_counselor": False,
+            "counselor_assignment_reason": None,
+            "followup_required": False,
+            "followup_time": None,
+            "followup_notes": None,
+            "meeting_scheduled": False,
+            "meeting_time": None,
+            "meeting_type": "CAMPUS_VISIT",
+            "meeting_notes": None
         }
         
         # Parse JSON output safely
@@ -492,6 +551,33 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
                 data["classification"] = "Hot"
             elif "warm" in parse_result.lower():
                 data["classification"] = "Warm"
+
+        # Heuristic backfill if LLM parser missed explicit actions
+        transcript_lower = (transcript or "").lower()
+        if not data.get("crm_status") or data["crm_status"] == "CONTACTED":
+            if data.get("booking_intent") in ["Campus Visit at Ramphal Chowk", "Campus Visit"] or "visit" in transcript_lower or "simulator" in transcript_lower:
+                data["crm_status"] = "INTERESTED"
+                data["meeting_scheduled"] = True
+                data["meeting_time"] = data.get("meeting_time") or data.get("scheduled_time")
+                data["assign_counselor"] = True
+            elif data.get("booking_intent") == "Counselling Call" or data.get("callback_requested") or "call back" in transcript_lower or "kal" in transcript_lower:
+                data["crm_status"] = "FOLLOW_UP"
+                data["followup_required"] = True
+                data["followup_time"] = data.get("followup_time") or data.get("callback_time") or data.get("scheduled_time")
+                data["assign_counselor"] = True
+            elif data.get("classification") in ["Hot", "Warm"]:
+                data["crm_status"] = "INTERESTED"
+                data["assign_counselor"] = True
+            elif any(w in transcript_lower for w in ["not interested", "wrong number", "job chahiya", "placement guarantee", "paise nahi"]):
+                data["crm_status"] = "LOST"
+                if "wrong number" in transcript_lower:
+                    data["lost_reason"] = "INVALID_NUMBER"
+                elif "job" in transcript_lower:
+                    data["lost_reason"] = "JOB_SEEKER"
+                elif "paise" in transcript_lower or "budget" in transcript_lower:
+                    data["lost_reason"] = "PRICE_HIGH"
+                else:
+                    data["lost_reason"] = "NOT_INTERESTED"
                 
         # Retrieve lead profile from Cloud SQL to fetch existing name
         lead = supabase_client.get_lead_by_phone(phone)
@@ -507,27 +593,32 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
             data["course_interest"] = "General Pilot Training Inquiry"
             
         duration_estimate = len(transcript.split()) * 2
-        summary = data.get("notes") or f"Qualifying conversation for {data['course_interest']}. Classified as {data['classification']}."
+        summary = data.get("notes") or f"Qualifying conversation for {data['course_interest']}. Status: {data.get('crm_status')}, Classification: {data['classification']}."
         
         # Determine outcome
-        outcome = "CALLBACK_REQUESTED" if data.get("callback_requested") else "CONNECTED"
-        if data.get("booking_intent") == "Campus Visit at Ramphal Chowk":
+        outcome = "CALLBACK_REQUESTED" if (data.get("callback_requested") or data.get("followup_required")) else "CONNECTED"
+        if data.get("meeting_scheduled") or data.get("booking_intent") == "Campus Visit at Ramphal Chowk":
             outcome = "CAMPUS_VISIT_SCHEDULED"
         elif data.get("booking_intent") == "Counselling Call":
             outcome = "COUNSELLING_SCHEDULED"
 
         if outcome == "CALLBACK_REQUESTED":
-            summary = f"Callback requested ({data.get('callback_time')}). {summary}"
+            fu_time = data.get('followup_time') or data.get('callback_time')
+            summary = f"Callback requested ({fu_time}). {summary}"
 
         custom_fields = {
             "is_18_above": data.get("is_18_above"),
             "city_or_location": data.get("city_or_location"),
             "confirmed_education_institute": data.get("confirmed_education_institute"),
             "open_to_ramphal_chowk": data.get("open_to_ramphal_chowk"),
-            "scheduled_time": data.get("scheduled_time"),
+            "scheduled_time": data.get("meeting_time") or data.get("followup_time") or data.get("scheduled_time"),
             "user_query": data.get("user_query"),
             "booking_intent": data.get("booking_intent"),
-            "notes": data.get("notes")
+            "notes": data.get("notes"),
+            "crm_status": data.get("crm_status"),
+            "lost_reason": data.get("lost_reason"),
+            "counselor_assignment_reason": data.get("counselor_assignment_reason"),
+            "meeting_type": data.get("meeting_type")
         }
 
         final_recording_url = gcs_recording_url or recording_url or ""
@@ -541,7 +632,7 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
             recording_url=final_recording_url,
             transcript=transcript,
             summary=summary,
-            callback_time=data.get("callback_time") or data.get("scheduled_time"),
+            callback_time=data.get("followup_time") or data.get("callback_time") or data.get("scheduled_time"),
             course_interest=data["course_interest"],
             classification=data["classification"],
             lead_name=resolved_name,
@@ -550,8 +641,49 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
             custom_fields=custom_fields,
             user_query=data.get("user_query"),
             booking_intent=data.get("booking_intent"),
-            provider_call_id=provider_call_id
+            provider_call_id=provider_call_id,
+            crm_status=data.get("crm_status"),
+            lost_reason=data.get("lost_reason"),
+            assign_counselor=data.get("assign_counselor", False),
+            counselor_reason=data.get("counselor_assignment_reason"),
+            followup_time=data.get("followup_time") or data.get("callback_time"),
+            followup_notes=data.get("followup_notes"),
+            meeting_time=data.get("meeting_time") or (data.get("scheduled_time") if data.get("meeting_scheduled") else None),
+            meeting_type=data.get("meeting_type", "CAMPUS_VISIT"),
+            meeting_notes=data.get("meeting_notes")
         )
+
+        # 1a. Explicit action dispatchers based on caller response
+        if data.get("assign_counselor"):
+            try:
+                supabase_client.assign_counselor_to_lead(
+                    phone, 
+                    reason=data.get("counselor_assignment_reason") or "Assigned dedicated admissions counselor based on call qualification."
+                )
+            except Exception as assign_err:
+                print(f"Post-Call Notice: Counselor assignment error ({assign_err})")
+
+        if data.get("meeting_scheduled") or data.get("booking_intent") == "Campus Visit at Ramphal Chowk":
+            try:
+                supabase_client.schedule_meeting(
+                    phone,
+                    meeting_time=data.get("meeting_time") or data.get("scheduled_time"),
+                    meeting_type=data.get("meeting_type", "CAMPUS_VISIT"),
+                    notes=data.get("meeting_notes") or f"Campus visit & simulator session confirmed for {resolved_name}"
+                )
+            except Exception as meeting_err:
+                print(f"Post-Call Notice: Meeting schedule error ({meeting_err})")
+
+        if data.get("followup_required") or data.get("callback_requested"):
+            try:
+                supabase_client.schedule_followup(
+                    phone,
+                    followup_time=data.get("followup_time") or data.get("callback_time"),
+                    notes=data.get("followup_notes") or f"Follow-up callback requested for {resolved_name}",
+                    reason="CALLBACK_REQUESTED"
+                )
+            except Exception as fu_err:
+                print(f"Post-Call Notice: Followup schedule error ({fu_err})")
 
         # 1b. Direct webhook notification to Admin App to ensure immediate timeline & recording availability
         admin_api_url = os.environ.get("ADMIN_API_URL", "https://airborne-admin-368523757732.asia-south1.run.app")
@@ -571,9 +703,14 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
                     "transcript": transcript,
                     "summary": summary,
                     "classification": data.get("classification"),
+                    "crmStatus": data.get("crm_status"),
+                    "lostReason": data.get("lost_reason"),
+                    "assignCounselor": data.get("assign_counselor"),
                     "bookingIntent": data.get("booking_intent"),
                     "courseInterest": data.get("course_interest"),
                     "providerCallId": provider_call_id,
+                    "followupTime": data.get("followup_time") or data.get("callback_time"),
+                    "meetingTime": data.get("meeting_time") or data.get("scheduled_time")
                 }
                 requests.post(
                     f"{admin_api_url.rstrip('/')}/api/v1/telephony/events",
@@ -591,6 +728,14 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
                 "phone": phone,
                 "course_interest": data["course_interest"],
                 "classification": data["classification"],
+                "crm_status": data.get("crm_status"),
+                "lost_reason": data.get("lost_reason"),
+                "counselor_name": "Admissions Counselor" if data.get("assign_counselor") else None,
+                "counselor_reason": data.get("counselor_assignment_reason"),
+                "followup_time": data.get("followup_time") or data.get("callback_time"),
+                "followup_notes": data.get("followup_notes"),
+                "meeting_time": data.get("meeting_time") or data.get("scheduled_time"),
+                "meeting_notes": data.get("meeting_notes"),
                 "recording_url": final_recording_url
             }
             crm_sync.sync_lead_with_telecrm(lead_payload, transcript)
@@ -604,15 +749,56 @@ def run_post_call_pipeline(phone: str, direction: str, recording_url: str, provi
                 data["classification"],
                 resolved_name,
                 course_interest=data.get("course_interest"),
-                scheduled_time=data.get("scheduled_time"),
+                scheduled_time=data.get("meeting_time") or data.get("scheduled_time"),
                 booking_intent=data.get("booking_intent")
             )
         except Exception as auto_err:
             print(f"Post-Call Notice: WhatsApp post-call automation error ({auto_err})")
         
         print(f"Post-Call: Pipeline completed for {phone}.")
+        return data
     except Exception as pipeline_err:
         print(f"Post-Call Error: Pipeline failed ({pipeline_err})")
+        return {}
+
+def run_post_call_pipeline(phone: str, direction: str = "outbound", recording_url: str = "", provider_call_id: str = None):
+    """
+    Asynchronous post-call processor.
+    1. Archives call recording to Google Cloud Storage.
+    2. Extracts lead qualifiers, course interest, and callback intent using LLM.
+    3. Updates CRM (leads & lead_activities) directly in Cloud SQL.
+    4. Triggers secondary automations (WhatsApp & CRM sync).
+    Guarded against duplicate / concurrent pipeline execution.
+    """
+    cleaned_phone = phone.replace(" ", "").replace("-", "")
+    with _pipelines_lock:
+        if cleaned_phone in _active_pipelines:
+            print(f"Post-Call: Pipeline already executing for {cleaned_phone}. Skipping duplicate trigger.")
+            return
+        _active_pipelines.add(cleaned_phone)
+    try:
+        print(f"Post-Call: Starting pipeline for {phone}...")
+        transcript = get_transcript_string(phone)
+        if not transcript:
+            print(f"Post-Call: Empty transcript or session already processed for {phone}. Skipping processing.")
+            return
+
+        # 1. Archive call recording to Google Cloud Storage bucket
+        import storage_service
+        gcs_recording_url = storage_service.upload_call_recording_from_url(
+            recording_url, phone.replace("+", "")
+        ) if recording_url else ""
+
+        return analyze_call_transcript_and_qualify(
+            transcript=transcript,
+            phone=phone,
+            direction=direction,
+            recording_url=recording_url,
+            gcs_recording_url=gcs_recording_url,
+            provider_call_id=provider_call_id
+        )
+    except Exception as err:
+        print(f"Post-Call Pipeline Error ({phone}): {err}")
     finally:
         clear_session(phone)
         with _pipelines_lock:

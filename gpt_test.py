@@ -14,6 +14,7 @@ if not config.GEMINI_API_KEY:
 
 # Persistent session for connection pooling and low latency
 _gemini_session = requests.Session()
+client = None
 
 def chat_with_gemini(prompt: str, history: list = None, system_prompt: str = "", json_mode: bool = False) -> str:
     """

@@ -433,6 +433,15 @@ CRM_LOST_REASONS = {
     "LANGUAGE_BARRIER": "Unable to communicate in Hindi or English."
 }
 
+VALID_LEAD_STATUSES = {
+    'NEW', 'CONTACTED', 'INTERESTED', 'FOLLOW_UP', 'COUNSELED', 'APPLICATION_SUBMITTED', 
+    'CONVERTED', 'LOST', 'CONNECTED', 'CALL_BACK', 'PROSPECT', 'WON', 'NOT_CONNECTED', 
+    'RINGING', 'NOT_REACHABLE', 'SWITCHED_OFF', 'VOICEMAIL', 'INCOMING_BARD', 
+    'OUT_OF_SERVICE', 'NOT_AWARE', 'NOT_CONTACTABLE', 'LOCATION_OUT_OF_SCOPE', 
+    'LANGUAGE_BARRIER', 'PRICE_HIGH', 'JOINED_OTHERS', 'NOT_ELIGIBLE', 'INVALID_NUMBER', 
+    'TEST_LEAD', 'NOT_INTERESTED', 'REASON_NOT_SHARED', 'JOB_SEEKER'
+}
+
 DEFAULT_COUNSELORS = [
     {
         "id": "340e4b30-22bc-44f2-be56-85b061daadd1",
@@ -727,6 +736,7 @@ def schedule_meeting(
         "status": "INTERESTED",
         "meeting_type": meeting_type,
         "meeting_time": target_dt.isoformat(),
+        "next_follow_up": target_dt.isoformat(),
         "location": location,
         "notes": notes or f"Campus visit & A320 simulator demo at Ramphal Chowk, Dwarka scheduled for {target_dt.strftime('%Y-%m-%d %H:%M UTC')}"
     }

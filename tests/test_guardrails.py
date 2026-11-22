@@ -77,6 +77,16 @@ def test_language_adaptation():
         assert enforced == "ENGLISH", f"Expected ENGLISH enforced for: {q}"
 
 def test_evaluate_all_guardrails():
+    # Test AMD bypass
+    override, enforced, meta = guardrails.evaluate_all_guardrails("The person you are trying to reach is not available. Please record your message at the tone.")
+    assert override == guardrails.AMD_GUARDRAIL_RESPONSE
+    assert meta["guardrail"] == "AMD_CARRIER_IVR"
+
+    # Test audibility check-in bypass
+    override, enforced, meta = guardrails.evaluate_all_guardrails("Hello? Hello? Aawaz nahi aa rahi")
+    assert override == guardrails.AUDIBILITY_GUARDRAIL_RESPONSE
+    assert meta["guardrail"] == "AUDIBILITY_CHECK"
+
     # Test identity bypass
     override, enforced, meta = guardrails.evaluate_all_guardrails("Are you an AI or real Navrang sir?", phone="+919876543210")
     assert override == guardrails.IDENTITY_GUARDRAIL_RESPONSE
@@ -93,9 +103,22 @@ def test_evaluate_all_guardrails():
     assert enforced == "ENGLISH"
     assert meta["guardrail"] == "LANGUAGE_ADAPTATION"
 
+def test_placeholder_sanitization():
+    import precall_manager
+    dossier = precall_manager.PreCallDossier(
+        phone="+919999999999",
+        name="Amit",
+        course_interest="Not sure yet",
+        source="Website"
+    )
+    greeting = precall_manager.manager.generate_greeting(dossier, direction="outbound")
+    assert "not sure yet" not in greeting.lower()
+    assert "about pilot training" in greeting
+
 if __name__ == "__main__":
     test_identity_guardrail()
     test_campus_visit_guardrail()
     test_language_adaptation()
     test_evaluate_all_guardrails()
+    test_placeholder_sanitization()
     print("\n✅ ALL GUARDRAIL & TELEMETRY TESTS PASSED SUCCESSFULLY!")

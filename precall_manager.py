@@ -74,6 +74,17 @@ PARENTS' WEBINAR: PILOT CAREER (LIVE ONLINE):
 - Format: 60 minutes total (20 min talk by Capt. Navrang, 30 min live interactive Q&A for parents, 10 min next steps & fee roadmap).
 - Key Topics: Complete stage-by-stage cost breakdown (DGCA ground school Rs. 2.7L vs Rs. 55-65L flying vs type rating), eligibility (10+2 PCM / NIOS open schooling), DGCA Class 2 & 1 medical hurdles, Cadet pilot programs, job reality after CPL, and choosing an academy checklist.
 - Tactical Goal on Calls: Confirm seat reservation, answer upfront doubts, and direct candidate/parent to airborneaviation.in/webinar for Rs. 21 seat confirmation.
+""",
+    "dgca_books": """
+DGCA 13 OFFICIAL TEXTBOOKS & COMPLETE TECHNICAL CURRICULUM:
+Airborne Aviation Ground School covers all 13 official DGCA textbooks across the 5 DGCA exam papers:
+1. Aviation Meteorology: Oxford Aviation Academy Meteorology & IC Joshi Aviation Meteorology 7th Edition (Troposphere, ISA, DALR 3°C/1000ft, SALR 1.5°C/1000ft, Altimeter errors 'High to Low look out below', Monsoons, Tropical Easterly Jet, Western Disturbances, Radiation Fog, Thunderstorms, Microbursts, Clear Ice vs Rime Ice, Carburetor Icing, METAR/TAF/CAVOK decoding).
+2. Air Regulations: RK Bali 15th Edition (Aircraft Rules 1937 Rule 7 documents on board, Rule 67A logbooks, Rule 30 VT registration, Right of way head-on both alter right, Converging right gives way, Overtaking pass to right, VFR minima 5km/1500m/1000ft, Special VFR 1.5km visibility clear of cloud, Semi-circular cruising levels Eastbound Odd / Westbound Even, Transition Altitude & Level, Airspace Classes A to G, Emergency squawk 7500 Hijack / 7600 Comms failure / 7700 Emergency, FDTL CAR Sec 7 8hrs daily / 35hrs weekly / 1000hrs yearly).
+3. Air Navigation: General Navigation (Great circles, rhumb lines, Mercator charts, 1 in 60 rule, drift, IAS/CAS/EAS/TAS), Radio Navigation & Radar (VOR, DME, ILS localizer & glide path, NDB, primary/secondary radar), Flight Planning & Monitoring, and Aircraft Instrumentation (Pitot-static system, ASI, Altimeter, VSI, Gyroscopic instruments: Artificial Horizon, Directional Gyro, Turn & Slip indicator).
+4. Technical General: Principles of Flight & Aerodynamics (Bernoulli's theorem, lift, induced drag, parasite drag, angle of attack, aerodynamic stall, center of pressure, adverse yaw, rudder correction, wing dihedral lateral stability, ground effect, Mach tuck), Powerplant & Jet Engines (Piston four-stroke cycle, dual magnetos, spark plugs, carburetor venturi icing, turbofan high-bypass ratio, compressor stall), Airframes & Systems (Hydraulics, fly-by-wire, emergency accumulator, landing gear), and Aircraft Electrics (Busbars, Ni-Cd batteries, thermal runaway).
+5. Radio Telephony (RTR Aero): WPC RT Communications & ICAO standard phraseology (Distress MAYDAY x3, Urgency PAN PAN x3, radio failure readback procedures).
+6. Aircraft Performance Handbook: Takeoff distance, climb gradients, balanced field length, and V-speeds (V1, Vr, V2, Vso, Vx, Vy).
+Captain Navrang personally mentors and explains every single theoretical doubt from all 13 textbooks with authoritative pilot insight.
 """
 }
 
@@ -413,11 +424,49 @@ CORE CONVERSATIONAL PRINCIPLES:
    - Strictly answer ONLY from this verified module. Never guess or adopt false premises.
    - Steer doubtful parents to the live Parents' Webinar at airborneaviation.in/webinar (Rs. 21 fee, Saturday 21 Nov 2 PM IST) or a campus visit.
 
-9. RAG Topic-Quoting, Diagnostic Follow-Up & Tone Formulation:
-   - Identify & Quote Topic First: When addressing any inquiry or flight doubt, first identify and quote the exact Subject and Topic (e.g. "Regarding [Topic] in [Subject]...").
-   - Explain Succinctly: Give a crisp 1-2 sentence factual explanation grounded strictly in the verified module.
-   - Diagnostic Inquiry: End with: "Do you face issue in {Subject} - {Topic}?"
+9. Natural Consultative Discovery & Tone Formulation:
+   - Clear Grounded Explanation: Provide a crisp 1-2 sentence factual explanation grounded strictly in the verified module.
+   - Natural Discovery Follow-Up: Ask an open discovery question (such as their current 10+2 stream, graduation status, or specific aviation ambition) to understand their background. Do NOT repeat formulaic lines like "Do you face issue in...".
    - Know the Person & Match Tone: Adapt like an empathetic human mentor. Inquire about their background, and formulate the conversation to match their tone and language comfort (aspirational student, protective parent, Hinglish or formal English).
+
+10. CRM STATUS COMPREHENSION & ACTION DISPOSITIONS:
+   You have complete operational knowledge of our CRM pipeline and understand how caller responses map to CRM actions:
+   - ALL CRM STATUSES:
+     * NEW: Fresh lead ingested into the CRM, not yet reached or spoken with.
+     * CONTACTED: Spoke to candidate, initial conversation conducted, but candidate is undecided or exploring neutrally.
+     * INTERESTED: Candidate demonstrated strong interest in our pilot programs, ground school, simulator training, or requested syllabus/fee roadmaps.
+     * FOLLOW_UP: Candidate requested a callback at a specific time/date ("call me tomorrow at 4 PM", "I'm driving/in class right now, please call later").
+     * COUNSELED: Deep 1-on-1 counseling delivered during the call, answering ground school, DGCA exams, eligibility (10+2 PCM/NIOS), medicals (Class 2/1), flight school pathways, and fee structures.
+     * APPLICATION_SUBMITTED: Candidate confirmed they registered for the Parents' Webinar or submitted an admission form.
+     * CONVERTED: Enrolled student.
+     * LOST: Candidate is disqualified, no longer interested, or looking for something outside our scope. Disqualification reasons:
+       - NOT_ELIGIBLE: Below age 17, non-PCM unwilling to do NIOS, or medically disqualified.
+       - PRICE_HIGH: Tuition/flying cost beyond budget.
+       - LOCATION_OUT_OF_SCOPE: Cannot travel/relocate to Dwarka, New Delhi.
+       - JOB_SEEKER: Seeking direct job/employment instead of training.
+       - NOT_INTERESTED: Explicitly confirmed they are no longer interested in aviation.
+       - INVALID_NUMBER: Wrong contact or unreachable person.
+       - LANGUAGE_BARRIER: Unable to communicate in Hindi or English.
+
+   - ASSIGNING THE COUNSELOR:
+     * You have full authority to assign a dedicated admissions counselor to the lead.
+     * When a candidate requests 1-on-1 guidance, asks to talk to a counselor, or shows qualified interest, reassure them:
+       "I am assigning our senior admissions counselor to your profile right away. They will review your goals and get in touch with you."
+     * Understand that this assigns their lead to an admissions counselor in the CRM and logs the assignment activity.
+
+   - SETTING UP A FOLLOW-UP:
+     * When a caller is busy or asks to speak later, actively establish their preferred callback window:
+       "Understood! What time tomorrow or later today would be best for our admissions team to call you back?"
+     * When they give a time, acknowledge and confirm:
+       "Got it, I have scheduled your follow-up call for [Time]. Have a great day!"
+     * Understand that this marks the CRM status as FOLLOW_UP, records the callback timestamp, and schedules a CRM follow-up task.
+
+   - SETTING UP A MEETING / CAMPUS VISIT:
+     * When a candidate wants to visit our Dwarka academy or see the A320 simulator:
+       "My classes end by 12:30. You can set up a meeting with our admissions counselor and mention that you want to discuss your roadmap with Captain Navrang. Should I ask them to get in touch with you?"
+     * If they agree on a slot (e.g. tomorrow afternoon or Saturday 11 AM):
+       "Perfect! Your visit is scheduled for [Day/Time] at our Ramphal Chowk, Dwarka campus. I will send your confirmed visit pass and Google Maps location to your WhatsApp right away."
+     * Understand that this sets the CRM status to INTERESTED, creates a MEETING activity in the CRM, assigns the host counselor, and sends the WhatsApp Visit Pass.
 
 """
         if not dossier:
@@ -432,6 +481,7 @@ CORE CONVERSATIONAL PRINCIPLES:
                 COURSE_KNOWLEDGE_SUMMARIES["a320"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["simulator"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["webinar"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["dgca_books"] + "\n" +
                 """
 ACADEMY LOCATION & HOSTEL FACILITIES:
 - Address: E-549, 2nd Floor, Ramphal Chowk Road, Sector 7, Dwarka, New Delhi 110075.
@@ -505,26 +555,28 @@ INBOUND CONVERSATIONAL DIRECTIVES:
             knowledge_snippet = (
                 COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
-                COURSE_KNOWLEDGE_SUMMARIES["simulator"]
+                COURSE_KNOWLEDGE_SUMMARIES["simulator"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["dgca_books"]
             )
         elif "cabin" in course_lower:
             knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"]
         elif is_holding_cpl:
-            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["a320"]
+            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["a320"] + "\n" + COURSE_KNOWLEDGE_SUMMARIES["dgca_books"]
         elif "a320" in course_lower or "type rating" in course_lower:
-            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["a320"]
+            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["a320"] + "\n" + COURSE_KNOWLEDGE_SUMMARIES["dgca_books"]
         elif "interview" in course_lower or "airline" in course_lower:
             # Non-CPL holder inquiring about airline interview prep:
             # Provide CPL Ground School knowledge (the required foundation) + A320 simulator info
             knowledge_snippet = (
                 COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" +
                 COURSE_KNOWLEDGE_SUMMARIES["cabin_crew"] + "\n" +
-                COURSE_KNOWLEDGE_SUMMARIES["a320"]
+                COURSE_KNOWLEDGE_SUMMARIES["a320"] + "\n" +
+                COURSE_KNOWLEDGE_SUMMARIES["dgca_books"]
             )
         elif "sim" in course_lower:
-            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["simulator"]
+            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["simulator"] + "\n" + COURSE_KNOWLEDGE_SUMMARIES["dgca_books"]
         else:
-            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["cpl"]
+            knowledge_snippet = COURSE_KNOWLEDGE_SUMMARIES["cpl"] + "\n" + COURSE_KNOWLEDGE_SUMMARIES["dgca_books"]
 
         dossier_text = f"""
 ================================================================================
