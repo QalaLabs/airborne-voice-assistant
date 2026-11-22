@@ -16,6 +16,7 @@ edge-tts==7.2.8
 miniaudio==1.71
 elevenlabs==2.71.0
 google-cloud-storage==3.16.0
+google-cloud-texttospeech==2.38.0
 google-cloud-aiplatform==2.3.0
 twilio==9.11.2
 piopiy==1.2.2

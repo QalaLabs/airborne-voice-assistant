@@ -20,8 +20,9 @@ edge-tts>=6.1.10
 miniaudio>=1.71.0
 elevenlabs>=2.0.0
 
-# Google Cloud Platform (Cloud Storage & Cloud SQL)
+# Google Cloud Platform (Cloud Storage & Cloud SQL & Text-to-Speech)
 google-cloud-storage>=2.14.0
+google-cloud-texttospeech>=2.16.0
 
 # Vertex AI Agent Engine client (agent_client.py) -- only needed once
 # USE_AGENT_ENGINE is enabled. Package name/version UNVERIFIED (see plan's
