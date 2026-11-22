@@ -701,11 +701,18 @@ async def create_session(
     direction, customer_phone = resolve_call_context(ctx_data)
     logger.info(f"Call session connected! call_id={call_id}, direction={direction}, phone={customer_phone}, room={room_name}")
 
+    # Enforce unified concurrency limit (4) across inbound + outbound (Rule 9)
     try:
         import telephony
+        if not telephony.register_active_call(customer_phone, direction=direction):
+            logger.warning(
+                f"🚫 Concurrency limit reached ({telephony.MAX_CONCURRENT_CALLS} active calls). "
+                f"Rejecting session for {customer_phone} ({direction})."
+            )
+            return
         telephony.mark_call_progress(customer_phone, status="CONNECTED", call_id=call_id)
     except Exception as ce:
-        logger.warning(f"Could not mark telephony call progress: {ce}")
+        logger.warning(f"Could not register/mark telephony call progress: {ce}")
 
     # Check PreCallManager for pre-fed lead intelligence (zero mid-call RAG/DB latency)
     import precall_manager
@@ -1005,7 +1012,132 @@ async def prewarm_services():
             except Exception as ge:
                 logger.warning(f"Could not pre-cache greeting: {ge}")
 
-async def run_worker():
+_worker_lock_file_handle = None
+WORKER_LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".piopiy_worker.lock")
+
+def terminate_stale_workers(exclude_current_pid: bool = True):
+    """
+    Rule 1: Daemon Lifecycle & Duplicate Identity
+    Terminates any background stale python processes running piopiy_agent_worker.py
+    to prevent LiveKit DuplicateIdentity disconnect crashes.
+    """
+    current_pid = os.getpid()
+    terminated_pids = []
+
+    # 1. Read existing PID from lockfile if available
+    if os.path.exists(WORKER_LOCK_PATH):
+        try:
+            with open(WORKER_LOCK_PATH, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content.isdigit():
+                    old_pid = int(content)
+                    if not exclude_current_pid or old_pid != current_pid:
+                        terminated_pids.append(old_pid)
+        except Exception:
+            pass
+
+    # 2. Terminate PID from lockfile
+    for pid in terminated_pids:
+        try:
+            if sys.platform == "win32":
+                import subprocess
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+            else:
+                os.kill(pid, 9)
+            logger.info(f"Terminated stale worker PID from lock: {pid}")
+        except Exception as e:
+            logger.debug(f"Could not kill stale worker PID {pid}: {e}")
+
+    # 3. On Windows, scan for background python workers matching script name
+    if sys.platform == "win32":
+        try:
+            import subprocess
+            cmd = f"Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*piopiy_agent_worker*' -and $_.ProcessId -ne {current_pid} }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }}"
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, check=False)
+            for line in res.stdout.strip().splitlines():
+                if line.strip().isdigit():
+                    logger.info(f"Terminated stale background worker PID: {line.strip()}")
+        except Exception as pe:
+            logger.debug(f"Notice during background process cleanup: {pe}")
+
+def acquire_worker_lock() -> bool:
+    """
+    Rule 1: Enforces that ONLY ONE instance of piopiy_agent_worker.py can run at any time.
+    Uses OS-level file locking (msvcrt on Windows, fcntl on Unix).
+    Returns True if lock acquired, False if another instance is currently running.
+    """
+    global _worker_lock_file_handle
+    if _worker_lock_file_handle is not None:
+        return True
+
+    try:
+        handle = open(WORKER_LOCK_PATH, "a+", encoding="utf-8")
+        handle.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # Successfully acquired lock: record current PID
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"{os.getpid()}\n")
+        handle.flush()
+        _worker_lock_file_handle = handle
+        import atexit
+        atexit.register(release_worker_lock)
+        return True
+    except (IOError, OSError):
+        existing_pid = "unknown"
+        try:
+            with open(WORKER_LOCK_PATH, "r", encoding="utf-8") as f:
+                existing_pid = f.read().strip()
+        except Exception:
+            pass
+        logger.error(
+            f"🚫 [RULE 1 VIOLATION PREVENTED] Another instance of piopiy_agent_worker is already active "
+            f"(PID: {existing_pid}). Aborting duplicate launch to prevent LiveKit DuplicateIdentity call drops."
+        )
+        return False
+
+def release_worker_lock():
+    """Releases the OS file lock and cleans up the lockfile."""
+    global _worker_lock_file_handle
+    if _worker_lock_file_handle is not None:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                try:
+                    _worker_lock_file_handle.seek(0)
+                    msvcrt.locking(_worker_lock_file_handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
+            else:
+                import fcntl
+                try:
+                    fcntl.flock(_worker_lock_file_handle.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
+            _worker_lock_file_handle.close()
+        except Exception:
+            pass
+        _worker_lock_file_handle = None
+
+    try:
+        if os.path.exists(WORKER_LOCK_PATH):
+            os.remove(WORKER_LOCK_PATH)
+    except Exception:
+        pass
+
+async def run_worker(terminate_stale: bool = False):
+    if terminate_stale:
+        terminate_stale_workers()
+    if not acquire_worker_lock():
+        print("🚫 Piopiy worker aborting: Another worker instance is already running (Rule 1).")
+        return
+
     global main_loop
     main_loop = asyncio.get_running_loop()
     init_audio_stack()
@@ -1050,9 +1182,21 @@ async def run_worker():
                 pass
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 1.5, 30)
+        finally:
+            release_worker_lock()
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Piopiy AI Telephony Worker (Rule 1 single instance protected)")
+    parser.add_argument("--kill-stale", "-k", action="store_true", help="Terminate stale worker processes before starting (Rule 1)")
+    cli_args, _ = parser.parse_known_args()
+
+    if cli_args.kill_stale:
+        terminate_stale_workers()
+
     try:
         asyncio.run(run_worker())
     except KeyboardInterrupt:
         print("Stopped by user.")
+    finally:
+        release_worker_lock()

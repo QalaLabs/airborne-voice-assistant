@@ -15,8 +15,8 @@ $BucketName = "airborne-aviation-media-prod"
 # Requires Secret Manager secrets:
 #   INTERNAL_RAG_SHARED_SECRET — auth for /internal/rag/query (X-Internal-Secret)
 #   API_SHARED_SECRET — guards /api/calls/* and /webhooks/new-lead (X-API-Key)
-# Create once with:
-#   echo -n "<random-secret>" | gcloud secrets create INTERNAL_RAG_SHARED_SECRET --data-file=- --project $ProjectId
+# Create/update safely without PowerShell pipeline corruption (Rule 7):
+#   .\update_gcp_secret.ps1 -SecretName INTERNAL_RAG_SHARED_SECRET -SecretValue "<secret>" -ProjectId $ProjectId
 # ADK / Agent Engine assets were archived under ../adk-archive/
 
 Write-Host "=================================================" -ForegroundColor Cyan

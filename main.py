@@ -1048,6 +1048,13 @@ async def answer_call(
     
 
     if direction == "inbound":
+        import telephony
+        if not telephony.register_active_call(caller_phone, direction="inbound"):
+            print(f"Twilio Inbound: [BUSY] All {telephony.MAX_CONCURRENT_CALLS} lines busy. Returning busy TwiML for {caller_phone}.")
+            resp = VoiceResponse()
+            resp.say("All our admissions counselor lines are currently busy. We will call you back shortly.")
+            resp.hangup()
+            return str(resp)
 
         if dossier and dossier.name not in ["Candidate", "Future Pilot", "Inbound Caller", "New Lead"]:
 
@@ -1370,6 +1377,22 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
 
 
         if direction == "inbound":
+            import telephony
+            if not telephony.register_active_call(caller_phone, direction="inbound"):
+                print(f"TeleCMI Inbound: [BUSY] All {telephony.MAX_CONCURRENT_CALLS} agent lines currently engaged for {caller_phone}.")
+                if caller_phone != "guest":
+                    background_tasks.add_task(
+                        supabase_client.save_lead,
+                        name="Inbound Lead (Lines Busy)",
+                        phone=caller_phone,
+                        course="General Inquiry",
+                        status="MISSED_CALL_BUSY"
+                    )
+                busy_audio_url = get_greeting_voice_url("All our admissions counselor lines are currently busy. We have registered your number and our team will call you back shortly. Thank you.")
+                return [
+                    {"action": "play", "file_name": busy_audio_url},
+                    {"action": "hangup"}
+                ]
 
             if dossier and dossier.name not in ["Candidate", "Future Pilot", "Inbound Caller", "TeleCMI Inbound Lead", "New Lead"]:
 

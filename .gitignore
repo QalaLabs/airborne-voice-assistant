@@ -99,3 +99,7 @@ static/*.mp3
 *.sqlite
 *.sqlite3
 data/
+
+# Worker lock and temp files
+.piopiy_worker.lock
+*.tmp

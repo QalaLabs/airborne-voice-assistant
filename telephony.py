@@ -221,29 +221,82 @@ def _schedule_delivery_verification(request_id: str, formatted_phone: str, lead_
     timer.start()
 
 ACTIVE_CALL_TIMEOUT_SECS = 300
+COOLDOWN_PER_NUMBER_SECS = float(os.getenv("COOLDOWN_PER_NUMBER_SECS", "60.0"))
+_last_dispatched_at = {}
+_last_dispatched_lock = threading.Lock()
+
+def clear_cooldowns():
+    """Resets the per-phone rate limiting cooldown tracker (Rule 9)."""
+    with _last_dispatched_lock:
+        _last_dispatched_at.clear()
 
 def get_active_calls_count() -> int:
-    """Returns number of active concurrent calls, pruning expired leases (>5 mins)."""
+    """Returns number of active concurrent calls (inbound + outbound), pruning expired leases (>5 mins)."""
     with _active_calls_lock:
         now = time.time()
-        expired = [p for p, t in _active_calls.items() if now - t > ACTIVE_CALL_TIMEOUT_SECS]
+        expired = [
+            p for p, data in _active_calls.items()
+            if (now - (data["started_at"] if isinstance(data, dict) else data)) > ACTIVE_CALL_TIMEOUT_SECS
+        ]
         for p in expired:
             _active_calls.pop(p, None)
         return len(_active_calls)
 
-def register_active_call(phone: str) -> bool:
+def get_active_calls_breakdown() -> dict:
+    """Returns active call counts broken down by direction across the shared MAX_CONCURRENT_CALLS limit."""
+    with _active_calls_lock:
+        now = time.time()
+        expired = [
+            p for p, data in _active_calls.items()
+            if (now - (data["started_at"] if isinstance(data, dict) else data)) > ACTIVE_CALL_TIMEOUT_SECS
+        ]
+        for p in expired:
+            _active_calls.pop(p, None)
+        
+        inbound = 0
+        outbound = 0
+        for p, data in _active_calls.items():
+            dir_str = data.get("direction", "outbound") if isinstance(data, dict) else "outbound"
+            if dir_str == "inbound":
+                inbound += 1
+            else:
+                outbound += 1
+        return {
+            "total": len(_active_calls),
+            "inbound": inbound,
+            "outbound": outbound,
+            "max_concurrent_calls": MAX_CONCURRENT_CALLS,
+            "available_slots": max(0, MAX_CONCURRENT_CALLS - len(_active_calls))
+        }
+
+def register_active_call(phone: str, direction: str = "outbound") -> bool:
     """
-    Attempts to acquire a call slot under the MAX_CONCURRENT_CALLS limit.
-    Returns True if registered, False if concurrency limit is reached.
+    Attempts to acquire a call slot under the MAX_CONCURRENT_CALLS limit (4).
+    This concurrency limit strictly pools BOTH inbound and outbound calls.
+    Returns True if registered, False if concurrency ceiling is reached.
     """
     with _active_calls_lock:
         now = time.time()
-        expired = [p for p, t in _active_calls.items() if now - t > ACTIVE_CALL_TIMEOUT_SECS]
+        expired = [
+            p for p, data in _active_calls.items()
+            if (now - (data["started_at"] if isinstance(data, dict) else data)) > ACTIVE_CALL_TIMEOUT_SECS
+        ]
         for p in expired:
             _active_calls.pop(p, None)
+
+        # If this phone already holds an active lease, refresh timestamp/direction and return True
+        digits = "".join(filter(str.isdigit, phone))
+        for existing_key in list(_active_calls.keys()):
+            existing_digits = "".join(filter(str.isdigit, existing_key))
+            if existing_key == phone or (digits and existing_digits == digits):
+                _active_calls[existing_key] = {"started_at": now, "direction": direction, "phone": phone}
+                return True
+
+        # Check total combined concurrent calls (inbound + outbound)
         if len(_active_calls) >= MAX_CONCURRENT_CALLS:
             return False
-        _active_calls[phone] = now
+
+        _active_calls[phone] = {"started_at": now, "direction": direction, "phone": phone}
         return True
 
 def enqueue_pending_call(phone_number: str, lead_name: str = None, precall_data: dict = None) -> int:
@@ -319,7 +372,7 @@ def release_active_call(phone: str):
     released = False
     with _active_calls_lock:
         digits = "".join(filter(str.isdigit, phone))
-        to_remove = [k for k in _active_calls if k == phone or "".join(filter(str.isdigit, k)) == digits]
+        to_remove = [k for k in _active_calls if k == phone or (digits and "".join(filter(str.isdigit, k)) == digits)]
         for k in to_remove:
             _active_calls.pop(k, None)
             released = True
@@ -327,9 +380,10 @@ def release_active_call(phone: str):
         threading.Thread(target=_drain_waiting_queue, daemon=True).start()
 
 def clear_all_active_calls():
-    """Forces immediate reset of all active call concurrency slots and drains waiting queue."""
+    """Forces immediate reset of all active call concurrency slots, clears cooldowns, and drains waiting queue."""
     with _active_calls_lock:
         _active_calls.clear()
+    clear_cooldowns()
     threading.Thread(target=_drain_waiting_queue, daemon=True).start()
 
 try:
@@ -355,11 +409,11 @@ def _response_error(res):
             return str(res.get("msg") or res.get("message") or code)
     return None
 
-def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: dict = None) -> bool:
+def make_outbound_call(phone_number: str, lead_name: str = None, precall_data: dict = None, bypass_cooldown: bool = False) -> bool:
     """Boolean wrapper around dispatch_outbound_call() for callers that only need success/failure."""
-    return dispatch_outbound_call(phone_number, lead_name, precall_data)["ok"]
+    return dispatch_outbound_call(phone_number, lead_name, precall_data, bypass_cooldown=bypass_cooldown)["ok"]
 
-def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_data: dict = None) -> dict:
+def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_data: dict = None, bypass_cooldown: bool = False) -> dict:
     """
     Triggers an outbound call using PioPiy / TeleCMI (primary) or Twilio (fallback).
     Bridges the call to the FastAPI '/telecmi/answer' or '/answer-call' endpoints.
@@ -382,9 +436,27 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
     else:
         formatted_phone = "+" + clean_digits if not phone_number.startswith("+") else phone_number
         telecmi_to = clean_digits
+
+    # Rule 9: Enforce 60-second cooldown per target phone number to prevent room collisions
+    now = time.time()
+    if not bypass_cooldown and clean_digits:
+        with _last_dispatched_lock:
+            last_call = _last_dispatched_at.get(clean_digits, 0)
+            if now - last_call < COOLDOWN_PER_NUMBER_SECS:
+                remaining = int(COOLDOWN_PER_NUMBER_SECS - (now - last_call))
+                msg = f"Outbound call to {formatted_phone} rejected: 60-second cooldown active ({remaining}s remaining to prevent room collision)."
+                print(f"Telephony: [COOLDOWN] {msg}")
+                return {
+                    "ok": False,
+                    "provider": "telephony_rate_limiter",
+                    "status": "COOLDOWN_ACTIVE",
+                    "error": msg,
+                    "cooldown_remaining_secs": remaining,
+                    "request_id": None
+                }
             
-    # Enforce concurrency ceiling: maximum 4 calls simultaneously; line up if all lines busy
-    if not register_active_call(formatted_phone):
+    # Enforce concurrency ceiling: maximum 4 calls simultaneously across both inbound + outbound; line up if all lines busy
+    if not register_active_call(formatted_phone, direction="outbound"):
         queue_pos = enqueue_pending_call(phone_number, lead_name, precall_data)
         msg = f"All {MAX_CONCURRENT_CALLS} agent lines are currently busy. Call lined up in queue at position #{queue_pos}."
         print(f"Telephony: [LINE-UP] {lead_name or 'Candidate'} ({formatted_phone}) - {msg}")
@@ -396,6 +468,11 @@ def dispatch_outbound_call(phone_number: str, lead_name: str = None, precall_dat
             "request_id": f"queue-{int(time.time()*1000)}",
             "message": msg
         }
+
+    # Record dispatch timestamp for cooldown enforcement
+    if clean_digits:
+        with _last_dispatched_lock:
+            _last_dispatched_at[clean_digits] = time.time()
 
     print(f"Telephony: Initiating outbound call to {lead_name or 'Candidate'} at {formatted_phone} (active calls: {get_active_calls_count()}/{MAX_CONCURRENT_CALLS})...")
     
