@@ -1029,7 +1029,21 @@ def record_call_outcome(
                     params.append(course_interest)
 
                 # Update call tracking fields on lead
-                call_stat = "COMPLETED" if outcome in ["CONNECTED", "COMPLETED"] else ("FAILED" if outcome in ["FAILED", "NO_ANSWER", "BUSY", "MISSED", "REJECTED"] else outcome)
+                completed_outcomes = {
+                    "CONNECTED", "COMPLETED", "COUNSELLING_SCHEDULED", "QUALIFIED",
+                    "INTERESTED", "NOT_INTERESTED", "CALLBACK_REQUESTED", "VOICEMAIL"
+                }
+                failed_outcomes = {
+                    "FAILED", "NO_ANSWER", "BUSY", "MISSED", "REJECTED",
+                    "STALLED_CARRIER_OR_DND", "FALLBACK_FAILED", "CANCELLED", "UNAVAILABLE"
+                }
+                if outcome in completed_outcomes or (duration and duration > 0):
+                    call_stat = "COMPLETED"
+                elif outcome in failed_outcomes:
+                    call_stat = "FAILED"
+                else:
+                    call_stat = outcome
+
                 update_fields.append('"latestCallStatus" = %s')
                 params.append(call_stat)
                 update_fields.append('"latestCallOutcome" = %s')
@@ -1176,10 +1190,17 @@ def record_call_outcome(
             # Update calling_jobs table if it exists
             if lead_id or provider_call_id:
                 try:
-                    final_job_status = "COMPLETED" if outcome in ["CONNECTED", "COMPLETED"] else ("FAILED" if outcome in ["FAILED", "NO_ANSWER", "BUSY", "MISSED", "REJECTED", "STALLED_CARRIER_OR_DND", "FALLBACK_FAILED", "CANCELLED", "UNAVAILABLE"] else outcome)
+                    if outcome in completed_outcomes or (duration and duration > 0):
+                        final_job_status = "COMPLETED"
+                    elif outcome in failed_outcomes:
+                        final_job_status = "FAILED"
+                    else:
+                        final_job_status = "COMPLETED" if (duration and duration > 0) else "FAILED"
+
                     cur.execute("""
                         UPDATE calling_jobs SET
                             status = %s::"CallingJobStatus",
+                            "callOutcome" = COALESCE(%s, "callOutcome"),
                             "callCompletedAt" = CURRENT_TIMESTAMP,
                             "durationSecs" = %s,
                             "recordingUrl" = COALESCE(%s, "recordingUrl"),
@@ -1187,8 +1208,8 @@ def record_call_outcome(
                             summary = COALESCE(%s, summary),
                             "updatedAt" = CURRENT_TIMESTAMP
                         WHERE ("providerCallId" = %s AND %s IS NOT NULL)
-                           OR ("leadId" = %s AND status IN ('PROCESSING', 'INITIATED', 'RINGING', 'ANSWERED'));
-                    """, (final_job_status, duration, recording_url, transcript, summary, provider_call_id, provider_call_id, lead_id))
+                           OR ("leadId" = %s AND status IN ('PROCESSING', 'INITIATED', 'RINGING', 'ANSWERED', 'QUEUED'));
+                    """, (final_job_status, outcome, duration, recording_url, transcript, summary, provider_call_id, provider_call_id, lead_id))
                 except Exception as cj_err:
                     print(f"DB Notice (calling_jobs update): {cj_err}")
 
