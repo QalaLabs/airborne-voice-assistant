@@ -13,6 +13,7 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 import asyncio
 import logging
 import time
+from typing import Optional, Any, Dict, List, Tuple
 
 try:
     from loguru import logger
@@ -484,7 +485,7 @@ CORE CONVERSATIONAL PRINCIPLES:
    - IRRELEVANT / HESITANT INTERRUPTION (they say 'Wait', 'Hold on', cough, stray background noise, or lose focus): Do NOT get confused or repeat previous words verbatim. Politely anchor ("Sure, take your time,", "Theek hai,") and RECONSTRUCT the discussion: restate the single core question or fact simply to move the guidance forward.
 """
 
-GREETING_MESSAGE = "Hi! This is Captain Navrang from Airborne Aviation Academy, Dwarka. How may I guide your pilot training journey today?"
+GREETING_MESSAGE = "Hello! Captain Navrang here from Airborne Aviation. How may I help you today?"
 
 shared_whisper_model = None
 
@@ -522,6 +523,7 @@ class SharedModelWhisperSTTService(WhisperSTTService if WhisperSTTService is not
     """
     STT FrameProcessor instantiated freshly per call, reusing shared Faster-Whisper
     model weights in memory to avoid cancellation bugs and redundant memory footprint.
+    Supports auto language detection for seamless Hindi/Hinglish/English code-switching.
     """
     def _load(self):
         global shared_whisper_model
@@ -530,6 +532,10 @@ class SharedModelWhisperSTTService(WhisperSTTService if WhisperSTTService is not
         else:
             super()._load()
             shared_whisper_model = self._model
+
+    def language_to_service_language(self, language: Any) -> Optional[str]:
+        # Return None so Faster-Whisper automatically detects spoken language (English/Hindi/Hinglish)
+        return None
 
 def init_audio_stack():
     global shared_whisper_model
@@ -553,14 +559,13 @@ def init_audio_stack():
             )
             shared_whisper_model.transcribe = functools.partial(
                 shared_whisper_model.transcribe,
-                language="en",
                 beam_size=1,
                 best_of=1,
                 temperature=0.0,
                 condition_on_previous_text=False,
-                initial_prompt="Airborne Aviation, CPL, DGCA."
+                initial_prompt="Airborne Aviation Academy, CPL, DGCA, RTR, ground classes, pilot training, Ramphal Chowk, Dwarka, flying hours, eligibility, fees."
             )
-            print("Faster-Whisper (BASE, 4 threads, greedy) armed in memory!")
+            print("Faster-Whisper (BASE, 4 threads, greedy, multilingual) armed in memory!")
         except Exception as me:
             logger.warning(f"Could not initialize shared whisper model: {me}")
 
@@ -801,6 +806,7 @@ async def create_session(
         model=getattr(Model, "BASE", "base") if Model else "base",
         device="cpu",
         compute_type="int8",
+        no_speech_prob=0.70,
         language=getattr(Language, "EN", "en") if Language else "en"
     )
     orig_handle_transcription = getattr(stt, "_handle_transcription", None)
@@ -819,12 +825,12 @@ async def create_session(
         stt._handle_transcription = logged_handle_transcription
 
     # 2. Fresh VAD analyzer instance per call (never reused to avoid cancellation freeze)
-    # Tuned to prevent listening to soft voices / whispers and allow natural caller pausing without cutoff
+    # Tuned to capture normal conversational mobile telephone loudness without dropping quiet speech
     vad_params = VADParams(
-        start_secs=0.20,
-        stop_secs=0.90,
-        confidence=0.75,
-        min_volume=0.70
+        start_secs=0.15,
+        stop_secs=0.55,
+        confidence=0.55,
+        min_volume=0.15
     ) if VADParams else None
     vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
 
@@ -1002,9 +1008,9 @@ async def prewarm_services():
     if global_eleven_tts:
         greetings_to_cache = [
             GREETING_MESSAGE,
-            "Hi Deepak! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about DGCA Commercial Pilot License program. How can I guide your pilot training journey today?",
-            "Hello! This is Captain Navrang from Airborne Aviation Academy in Dwarka. Calling regarding your inquiry about aviation training. How can I guide your pilot training journey today?",
-            "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+            "Hi Deepak! Captain Navrang from Airborne Aviation, calling about your pilot inquiry. How can I help today?",
+            "Hello! Captain Navrang from Airborne Aviation, calling about your pilot training inquiry. How can I help today?",
+            "Hello! Captain Navrang here from Airborne Aviation. How may I help you?"
         ]
         for g in greetings_to_cache:
             try:

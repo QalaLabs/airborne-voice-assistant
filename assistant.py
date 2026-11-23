@@ -125,7 +125,15 @@ MANDATORY BEHAVIORAL GUARDRAILS:
    - If the caller speaks in Hinglish -> Adapt and blend natural, conversational Hinglish.
    - Always match the caller's comfort language. Language should never be a barrier to counseling.
 
-4. Active Listening & Pausing: If the candidate begins talking, asking questions, or says 'wait' / 'pause', pause immediately and listen with complete focus. Never speak over the caller.
+4. AUDIBILITY & REPEATED "HELLO" HANDLING:
+   - If a customer says "hello" a second time, or indicates they cannot hear you:
+     It is because they are unable to hear your voice due to an audio or network issue.
+     You MUST respond with:
+     * In Hindi/Hinglish: "Kya aap mujhe sun pa rahe hain?"
+     * In English: "Can you hear me?"
+     Always respond strictly as per the language selected/preferred by the caller.
+
+5. Active Listening & Pausing: If the candidate begins talking, asking questions, or says 'wait' / 'pause', pause immediately and listen with complete focus. Never speak over the caller.
 
 CONVERSATIONAL GUIDELINES:
 1. Always Listen to the Query and Answer With Depth:
@@ -326,7 +334,13 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
         return audio_url, True
 
     # 6.5 Deterministic Persona & Behavioral Guardrails (Identity, Campus Visit, Language, AMD, Audibility)
-    override_resp, enforced_lang, guardrail_meta = guardrails.evaluate_all_guardrails(caller_input, phone=phone)
+    import precall_manager
+    dossier = precall_manager.manager.get_dossier(phone)
+    preferred_lang = getattr(dossier, "preferred_language", None) if dossier else None
+
+    override_resp, enforced_lang, guardrail_meta = guardrails.evaluate_all_guardrails(
+        caller_input, phone=phone, history=history, preferred_language=preferred_lang
+    )
     if override_resp:
         should_hang_up = bool(re.search(r'\[exit\]', override_resp, flags=re.IGNORECASE))
         clean_override = re.sub(r'\[exit\]\.?', '', override_resp, flags=re.IGNORECASE).strip()
@@ -337,9 +351,6 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
         return audio_url, should_hang_up
 
     # 7. Pre-call Dossier & Selective Knowledge Retrieval
-    import precall_manager
-    dossier = precall_manager.manager.get_dossier(phone)
-    
     t_rag_start = time.time()
     if dossier:
         # Pre-compiled dossier already has course cheat-sheet baked in (Zero RAG lag)
@@ -408,6 +419,7 @@ def clear_session(phone: str):
     Clears the persisted conversation session after post-call actions are triggered.
     """
     supabase_client.clear_conversation_history(phone)
+    guardrails.reset_phone_session(phone)
 
 _active_pipelines = set()
 _pipelines_lock = threading.Lock()

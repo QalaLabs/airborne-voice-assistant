@@ -84,10 +84,36 @@ def test_evaluate_all_guardrails():
     assert override == guardrails.AMD_GUARDRAIL_RESPONSE
     assert meta["guardrail"] == "AMD_CARRIER_IVR"
 
-    # Test audibility check-in bypass
+    # Test audibility check-in bypass (Hindi)
     override, enforced, meta = guardrails.evaluate_all_guardrails("Hello? Hello? Aawaz nahi aa rahi")
-    assert override == guardrails.AUDIBILITY_GUARDRAIL_RESPONSE
+    assert override == guardrails.AUDIBILITY_RESPONSE_HINDI
+    assert override == "Kya aap mujhe sun pa rahe hain?"
     assert meta["guardrail"] == "AUDIBILITY_CHECK"
+
+    # Test audibility check-in bypass (English)
+    override_en, enforced_en, meta_en = guardrails.evaluate_all_guardrails("Can you hear me?", preferred_language="English")
+    assert override_en == guardrails.AUDIBILITY_RESPONSE_ENGLISH
+    assert override_en == "Can you hear me?"
+    assert meta_en["guardrail"] == "AUDIBILITY_CHECK"
+
+    # Test repeated hello behavior:
+    # 1. First hello: normal turn (no audibility override)
+    guardrails.reset_phone_session("+919111111111")
+    first_override, _, _ = guardrails.evaluate_all_guardrails("Hello", phone="+919111111111", preferred_language="Hindi")
+    assert first_override is None
+
+    # 2. Second hello: customer unable to hear assistant -> triggers language-specific audibility response
+    second_override, second_lang, second_meta = guardrails.evaluate_all_guardrails("Hello", phone="+919111111111", preferred_language="Hindi")
+    assert second_override == "Kya aap mujhe sun pa rahe hain?"
+    assert second_meta["guardrail"] == "AUDIBILITY_CHECK"
+
+    # 3. Second hello in English session
+    guardrails.reset_phone_session("+919222222222")
+    en_first, _, _ = guardrails.evaluate_all_guardrails("Hello", phone="+919222222222", preferred_language="English")
+    assert en_first is None
+    en_second, _, en_meta = guardrails.evaluate_all_guardrails("Hello", phone="+919222222222", preferred_language="English")
+    assert en_second == "Can you hear me?"
+    assert en_meta["guardrail"] == "AUDIBILITY_CHECK"
 
     # Test identity bypass
     override, enforced, meta = guardrails.evaluate_all_guardrails("Are you an AI or real Navrang sir?", phone="+919876543210")

@@ -279,14 +279,15 @@ class PreCallManager:
     def generate_greeting(self, dossier: PreCallDossier, direction: str = "outbound") -> str:
         """
         Constructs a crisp, natural opening greeting reflecting known lead facts.
+        Keeps length under 15-18 words (~3-4 seconds speech) to prevent caller fatigue or talk-over.
         """
         name = dossier.name if dossier.name and dossier.name not in ["Candidate", "New Lead", "Future Pilot", "Inbound Caller", "Guest"] else None
         course = (dossier.course_interest or "Commercial Pilot License").strip()
 
         if direction == "inbound":
             if name:
-                return f"Hello {name}! Thank you for calling Airborne Aviation Academy, Dwarka. Captain Navrang here, how may I help you today?"
-            return "Hello! Thank you for calling Airborne Aviation Academy in Dwarka. I am Captain Navrang, Chief Pilot Instructor. May I know your good name, and which course or query are you calling about today?"
+                return f"Hello {name}! Captain Navrang here from Airborne Aviation. How can I help you today?"
+            return "Hello! Captain Navrang here from Airborne Aviation. How may I help you?"
 
         # Outbound call
         course_l = course.lower()
@@ -301,8 +302,8 @@ class PreCallManager:
         )
         if is_webinar:
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry for our upcoming live Parents' Webinar on pilot careers. How can I guide you today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry for our upcoming live Parents' Webinar on pilot careers. How can I guide you today?"
+                return f"Hi {name}! Captain Navrang from Airborne Aviation, regarding our upcoming pilot webinar. How can I help today?"
+            return "Hello! Captain Navrang from Airborne Aviation, regarding our upcoming pilot webinar. How can I help today?"
 
         # 2. General Website / Homepage CTA Leads (no specific course aligned yet)
         is_general_enquiry = (
@@ -312,13 +313,13 @@ class PreCallManager:
         )
         if is_general_enquiry:
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry on our website about pilot training. How can I guide your aviation journey today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry on our website about pilot training. How can I guide your aviation journey today?"
+                return f"Hi {name}! Captain Navrang from Airborne Aviation, calling about pilot training. How can I help today?"
+            return "Hello! Captain Navrang from Airborne Aviation, calling about pilot training. How can I help today?"
 
         if "cabin" in course_l:
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about cabin crew training. How can I guide you today?"
+                return f"Hi {name}! Captain Navrang from Airborne Aviation, regarding your cabin crew inquiry. How can I help today?"
+            return "Hello! Captain Navrang from Airborne Aviation, regarding your cabin crew inquiry. How can I help today?"
         
         is_holding_cpl = False
         if dossier.prior_aviation_exp:
@@ -329,25 +330,25 @@ class PreCallManager:
 
         if is_holding_cpl or "type rating" in course_l or "a320" in course_l:
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about Airbus A320 Type Rating and airline prep. How can I guide you today?"
+                return f"Hi {name}! Captain Navrang from Airborne Aviation, regarding your A320 and airline training inquiry. How can I help today?"
+            return "Hello! Captain Navrang from Airborne Aviation, regarding your A320 and airline training inquiry. How can I help today?"
 
         if "interview" in course_l or "airline prep" in course_l:
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about airline interview preparation. How can I guide your aviation journey today?"
+                return f"Hi {name}! Captain Navrang from Airborne Aviation, regarding your airline interview prep inquiry. How can I help today?"
+            return "Hello! Captain Navrang from Airborne Aviation, regarding your airline interview prep inquiry. How can I help today?"
 
         # Standard Pilot Training / CPL inquiry
         is_generic = not course or any(bad in course_l for bad in ["not sure", "unknown", "none", "general", "null"])
         if is_generic:
             if name:
-                return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training and aviation career options. How can I guide your journey today?"
-            return "Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about pilot training and aviation career options. How can I guide your journey today?"
+                return f"Hi {name}! Captain Navrang from Airborne Aviation, calling about pilot training. How can I help today?"
+            return "Hello! Captain Navrang from Airborne Aviation, calling about pilot training. How can I help today?"
 
         clean_course = course.strip()
         if name:
-            return f"Hi {name}! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {clean_course}. How can I guide your pilot training journey today?"
-        return f"Hello! This is Captain Navrang from Airborne Aviation Academy, Dwarka. Calling regarding your inquiry about {clean_course}. How can I guide your aviation journey today?"
+            return f"Hi {name}! Captain Navrang from Airborne Aviation, calling about your {clean_course} inquiry. How can I help today?"
+        return f"Hello! Captain Navrang from Airborne Aviation, calling about your {clean_course} inquiry. How can I help today?"
 
     def compile_system_prompt(self, dossier: Optional[PreCallDossier], direction: str = "outbound") -> str:
         """
@@ -389,6 +390,14 @@ MANDATORY BEHAVIORAL GUARDRAILS:
    - If the caller speaks in English -> Respond in fluent, professional English.
    - If the caller speaks in Hinglish -> Adapt and blend natural, conversational Hinglish.
    - Always match the caller's comfort language. Language should never be a barrier to counseling.
+
+4. AUDIBILITY & REPEATED "HELLO" HANDLING:
+   - If a customer says "hello" a second time, or indicates they cannot hear you:
+     It is because they are unable to hear your voice due to an audio or network issue.
+     You MUST respond with:
+     * In Hindi/Hinglish: "Kya aap mujhe sun pa rahe hain?"
+     * In English: "Can you hear me?"
+     Always respond strictly as per the language selected/preferred by the caller.
 
 CORE CONVERSATIONAL PRINCIPLES:
 1. Always Listen to the Query and Answer With Real Depth:
