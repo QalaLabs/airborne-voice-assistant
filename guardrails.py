@@ -310,15 +310,16 @@ def check_audibility_guardrail_with_lang(
         session_hello_count = _phone_hello_tracker.get(phone_key, 0) + 1
         _phone_hello_tracker[phone_key] = session_hello_count
 
-        # If customer is saying hello for the second time (or more)
-        if prior_hellos >= 1 or session_hello_count >= 2:
+        # If customer is saying hello for the second time (or more), or mid-call after previous conversation turns
+        is_mid_call = bool(history and len(history) >= 2)
+        if prior_hellos >= 1 or session_hello_count >= 2 or is_mid_call:
             log_highlight(
-                "[GUARDRAIL TRIGGERED: SECOND HELLO AUDIBILITY]",
+                "[GUARDRAIL TRIGGERED: HELLO AUDIBILITY CONFIRMATION]",
                 {
                     "Caller Phone": phone or "N/A",
                     "Caller Input": caller_input,
                     "Detected Lang": target_lang,
-                    "Action": "Second Hello - Customer unable to hear assistant",
+                    "Action": "Mid-Call or Repeated Hello - Caller confirming connection",
                     "Response": expected_resp
                 },
                 border_char="="

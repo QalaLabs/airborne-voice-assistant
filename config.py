@@ -26,11 +26,26 @@ ELEVENLABS_KEY_ID = _clean_env("ELEVENLABS_KEY_ID", "")
 ELEVENLABS_VOICE_ID = _clean_env("ELEVENLABS_VOICE_ID", "eJTrVjiaPKqBMpMujQdM")
 ELEVENLABS_MODEL_ID = _clean_env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 ELEVENLABS_AGENT_ID = _clean_env("ELEVENLABS_AGENT_ID", "agent_5701kztar977fxsb7nj7cxedcrgf")
+ELEVENLABS_VOICE_SPEED = float(_clean_env("ELEVENLABS_VOICE_SPEED", "0.88"))
+ELEVENLABS_STABILITY = float(_clean_env("ELEVENLABS_STABILITY", "0.48"))
+ELEVENLABS_SIMILARITY_BOOST = float(_clean_env("ELEVENLABS_SIMILARITY_BOOST", "0.78"))
 
 # Secondary: Google Cloud Text-to-Speech (Cloud Run native)
 GOOGLE_TTS_VOICE = _clean_env("GOOGLE_TTS_VOICE", "en-IN-Neural2-B")
 GOOGLE_TTS_LANG = _clean_env("GOOGLE_TTS_LANG", "en-IN")
-GOOGLE_TTS_SPEED = float(os.environ.get("GOOGLE_TTS_SPEED", "1.0"))
+GOOGLE_TTS_SPEED = float(os.environ.get("GOOGLE_TTS_SPEED", "0.93"))
+
+# Voice Activity Detection (VAD) / Turn-Taking Silence Settings
+# stop_secs: duration of silence before confirming end of caller turn (1.1s allows natural pauses/breaths without cutting caller off)
+VAD_STOP_SECS = float(_clean_env("VAD_STOP_SECS", "1.1"))
+VAD_START_SECS = float(_clean_env("VAD_START_SECS", "0.25"))
+VAD_CONFIDENCE = float(_clean_env("VAD_CONFIDENCE", "0.65"))
+VAD_MIN_VOLUME = float(_clean_env("VAD_MIN_VOLUME", "0.35"))
+
+# Mid-Call Silence Confirmation Watchdog
+# When caller goes silent in the middle, agent checks in before hanging up
+SILENCE_FIRST_TIMEOUT_SECS = float(_clean_env("SILENCE_FIRST_TIMEOUT_SECS", "7.0"))
+SILENCE_SECOND_TIMEOUT_SECS = float(_clean_env("SILENCE_SECOND_TIMEOUT_SECS", "8.0"))
 
 # Twilio Credentials (fallback telephony carrier)
 TWILIO_ACCOUNT_SID = _clean_env("TWILIO_ACCOUNT_SID", "")

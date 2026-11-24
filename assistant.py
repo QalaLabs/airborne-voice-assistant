@@ -141,11 +141,12 @@ CONVERSATIONAL GUIDELINES:
    - Start with a brief, natural acknowledgment: "Understood,", "Got your point,", "Sure, let me clarify that,", "Haan bilkul,".
    - Address their exact inquiry directly, clearly, and thoroughly.
    - Do NOT insert unsolicited academy plugs (e.g. do not volunteer "Captain Navrang conducts simulator sessions at our campus") in the middle of technical explanations. Keep answers objective and informative.
-2. Two-Sentence Delivery (STRICT SPOKEN BREVITY):
-   - Keep responses strictly to 1 or 2 crisp sentences (under 32 words total). Telephony audio requires tight brevity.
-   - Sentence 1: Direct, substantive expert answer to what they asked.
-   - Sentence 2: A brief, natural check-in ("Does that clarify your doubt?", "Clear hua aapko?") OR a relevant follow-up only if needed.
-   - NEVER exceed 2 sentences. Never give long monologues.
+2. Natural Human Conversational Delivery (Human-like Spoken Pacing):
+   - Keep responses focused, concise, and easy to comprehend over a phone call (typically 1 to 3 natural spoken sentences, under 45 words).
+   - Talk at a relaxed, calm, measured pace like an experienced, warm mentor having a real conversation.
+   - AVOID ROBOTIC CLOSING TAGS: NEVER mechanically repeat "Clear hua aapko?", "Does that clarify your doubt?", or force a diagnostic quiz question on every turn. That destroys the human feel of the conversation.
+   - Instead, let the conversation breathe naturally. Answer their question clearly with human warmth, and only ask an open discovery question when it genuinely helps understand their background or next step.
+   - Avoid long monologues. Give clear guidance and allow space for the caller to speak.
 3. Pricing & Fees:
    - STRICT PRICING RULE: NEVER volunteer course fees (e.g. Rs. 2,70,000 or Rs. 55-65 Lakhs) unless the caller explicitly asks about fees, cost, tuition, or budget.
 5. Low-Network & Audio Clarity Adaptations:
@@ -297,7 +298,11 @@ def handle_conversation(recording_url: str, phone: str, direction: str, caller_i
             audio_url = speak_and_get_url(response_text.replace("[EXIT]", "").strip())
             return audio_url, True
 
-        response_text = "I couldn't hear you clearly. Could you please repeat that? (Aapki aawaz clear nahi thi. Kya aap dohara sakte hain?)"
+        is_hindi = any(re.search(r'[\u0900-\u097F]', msg.get("content", "")) for msg in history) if history else False
+        if is_hindi:
+            response_text = "Aapki aawaz clear nahi aa rahi thi. Kya aap dohara sakte hain?"
+        else:
+            response_text = "I couldn't hear you clearly. Could you please repeat that?"
         history.append({"role": "user", "content": "[Silence/Unrecognized Input]"})
         history.append({"role": "assistant", "content": response_text})
         supabase_client.save_conversation_history(phone, history, direction)

@@ -64,7 +64,7 @@ def synthesize_with_google_tts(text: str) -> bytes:
             )
             audio_config = google_tts.AudioConfig(
                 audio_encoding=google_tts.AudioEncoding.MP3,
-                speaking_rate=getattr(config, "GOOGLE_TTS_SPEED", 1.0)
+                speaking_rate=getattr(config, "GOOGLE_TTS_SPEED", 0.93)
             )
             response = client.synthesize_speech(input=s_input, voice=voice, audio_config=audio_config)
             return response.audio_content
@@ -119,7 +119,12 @@ def speak_and_get_url(text: str) -> str:
         payload = {
             "text": text,
             "model_id": getattr(config, "ELEVENLABS_MODEL_ID", "eleven_multilingual_v2") or "eleven_multilingual_v2",
-            "voice_settings": {"stability": 0.55, "similarity_boost": 0.8}
+            "voice_settings": {
+                "stability": getattr(config, "ELEVENLABS_STABILITY", 0.48),
+                "similarity_boost": getattr(config, "ELEVENLABS_SIMILARITY_BOOST", 0.78),
+                "speed": getattr(config, "ELEVENLABS_VOICE_SPEED", 0.88),
+                "use_speaker_boost": True
+            }
         }
         try:
             resp = _tts_session.post(url, json=payload, headers=headers, timeout=10)

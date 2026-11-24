@@ -87,27 +87,41 @@ class GraceWindowInterruptionStrategy(VADUserTurnStartStrategy):
     """VAD-based barge-in that pauses and cancels bot speech immediately when the user speaks,
     while ignoring initial connection clicks during the first moments of the opening greeting."""
 
-    def __init__(self, *, grace_secs: float = BARGE_IN_GRACE_SECS, **kwargs):
+    def __init__(self, *, grace_secs: float = BARGE_IN_GRACE_SECS, state_tracker: Optional[dict] = None, **kwargs):
         super().__init__(**kwargs)
         self._grace_secs = grace_secs
         self._first_speech_at = None
         self._first_speech_done = False
         self._bot_speaking = False
+        self._state_tracker = state_tracker
 
     async def reset(self):
         await super().reset()
         self._bot_speaking = False
+        if self._state_tracker is not None:
+            self._state_tracker["bot_speaking"] = False
 
     async def process_frame(self, frame):
         if isinstance(frame, BotStartedSpeakingFrame):
             if self._first_speech_at is None:
                 self._first_speech_at = time.monotonic()
             self._bot_speaking = True
+            if self._state_tracker is not None:
+                self._state_tracker["bot_speaking"] = True
+                self._state_tracker["last_activity"] = time.monotonic()
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._first_speech_done = True
             self._bot_speaking = False
+            if self._state_tracker is not None:
+                self._state_tracker["bot_speaking"] = False
+                self._state_tracker["first_greeting_done"] = True
+                self._state_tracker["last_activity"] = time.monotonic()
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
+            if self._state_tracker is not None:
+                self._state_tracker["user_speaking"] = True
+                self._state_tracker["last_activity"] = time.monotonic()
+                self._state_tracker["silence_check_count"] = 0
             in_grace = (
                 self._bot_speaking
                 and not self._first_speech_done
@@ -117,6 +131,11 @@ class GraceWindowInterruptionStrategy(VADUserTurnStartStrategy):
             if in_grace:
                 return
             await self.trigger_user_turn_started()
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            if self._state_tracker is not None:
+                self._state_tracker["user_speaking"] = False
+                self._state_tracker["last_activity"] = time.monotonic()
+            await super().process_frame(frame)
         else:
             await super().process_frame(frame)
 
@@ -170,7 +189,7 @@ class GoogleCloudTTSService(TTSService):
                     audio_encoding=texttospeech.AudioEncoding.LINEAR16,
                     sample_rate_hertz=self._sample_rate,
                     pitch=-1.0,
-                    speaking_rate=1.02,
+                    speaking_rate=getattr(config, "GOOGLE_TTS_SPEED", 0.93),
                     volume_gain_db=1.0
                 )
                 resp = await asyncio.to_thread(
@@ -269,9 +288,10 @@ class FastStreamingElevenLabsTTS(TTSService):
                 "text": clean_text,
                 "model_id": self._model_id,
                 "voice_settings": {
-                    "stability": 0.50,
-                    "similarity_boost": 0.75,
-                    "speed": 1.0
+                    "stability": float(getattr(config, "ELEVENLABS_STABILITY", 0.48)),
+                    "similarity_boost": float(getattr(config, "ELEVENLABS_SIMILARITY_BOOST", 0.78)),
+                    "speed": float(getattr(config, "ELEVENLABS_VOICE_SPEED", 0.88)),
+                    "use_speaker_boost": True
                 }
             }
             chunks = []
@@ -318,9 +338,10 @@ class FastStreamingElevenLabsTTS(TTSService):
                     "text": clean_text,
                     "model_id": self._model_id,
                     "voice_settings": {
-                        "stability": 0.65,
-                        "similarity_boost": 0.85,
-                        "speed": 1.0
+                        "stability": float(getattr(config, "ELEVENLABS_STABILITY", 0.48)),
+                        "similarity_boost": float(getattr(config, "ELEVENLABS_SIMILARITY_BOOST", 0.78)),
+                        "speed": float(getattr(config, "ELEVENLABS_VOICE_SPEED", 0.88)),
+                        "use_speaker_boost": True
                     }
                 }
                 client = self._get_client()
@@ -356,6 +377,13 @@ class ResilientGoogleLLMService(GoogleLLMService if GoogleLLMService is not None
     Guarantees strict alternating turn structure for Google Gemini API and
     enforces deterministic behavioral guardrails (Identity, Campus Visits, Language Adaptation).
     """
+    def __init__(self, *args, customer_phone: str = "", preferred_language: Optional[str] = None, state_tracker: Optional[dict] = None, **kwargs):
+        if GoogleLLMService is not object:
+            super().__init__(*args, **kwargs)
+        self.customer_phone = customer_phone
+        self.preferred_language = preferred_language
+        self.state_tracker = state_tracker
+
     async def _stream_content(self, params_from_context):
         messages = params_from_context.get("messages", [])
         cleaned_messages = list(messages)
@@ -379,9 +407,23 @@ class ResilientGoogleLLMService(GoogleLLMService if GoogleLLMService is not None
             user_content = getattr(last_user_msg, "content", "")
 
         import guardrails
-        override_resp, enforced_lang, guardrail_meta = guardrails.evaluate_all_guardrails(str(user_content))
+        pref_lang = self.preferred_language
+        if self.state_tracker and self.state_tracker.get("preferred_language"):
+            pref_lang = self.state_tracker["preferred_language"]
+
+        override_resp, enforced_lang, guardrail_meta = guardrails.evaluate_all_guardrails(
+            str(user_content),
+            phone=self.customer_phone,
+            history=cleaned_messages,
+            preferred_language=pref_lang
+        )
         if override_resp:
             logger.info(f"🛡️ Guardrail active: delivering instant canonical response for query: '{user_content}'")
+            if self.state_tracker:
+                self.state_tracker["last_activity"] = time.monotonic()
+                self.state_tracker["silence_check_count"] = 0
+                if enforced_lang == "HINDI":
+                    self.state_tracker["preferred_language"] = "HINDI"
             async def _guardrail_stream():
                 yield override_resp
             return _guardrail_stream()
@@ -389,9 +431,23 @@ class ResilientGoogleLLMService(GoogleLLMService if GoogleLLMService is not None
         import time
         params_from_context["messages"] = cleaned_messages
         t_start = time.time()
-        stream = await super()._stream_content(params_from_context)
+        try:
+            stream = await super()._stream_content(params_from_context)
+        except Exception as le:
+            logger.error(f"Gemini LLM error: {le}")
+            stream = None
+
         if not stream:
-            return stream
+            # Fallback reassurance if LLM returns empty or fails so the call NEVER hangs
+            is_hindi = pref_lang == "HINDI" or (self.state_tracker and self.state_tracker.get("preferred_language") == "HINDI")
+            fallback_text = (
+                "Haan ji, main sun raha hoon. Kya aap apna sawal dohara sakte hain?"
+                if is_hindi else
+                "Yes, I am here. Could you please repeat your question?"
+            )
+            async def _fallback_stream():
+                yield fallback_text
+            return _fallback_stream()
 
         async def _instrumented_stream():
             first_chunk = True
@@ -400,6 +456,9 @@ class ResilientGoogleLLMService(GoogleLLMService if GoogleLLMService is not None
                     ttft = (time.time() - t_start) * 1000
                     logger.info(f"⚡ Gemini TTFT (Time-To-First-Token): {ttft:.1f}ms")
                     first_chunk = False
+                    if self.state_tracker:
+                        self.state_tracker["last_activity"] = time.monotonic()
+                        self.state_tracker["silence_check_count"] = 0
                 yield chunk
 
         return _instrumented_stream()
@@ -441,23 +500,26 @@ MANDATORY BEHAVIORAL GUARDRAILS:
    When the caller asks about visiting our Dwarka campus, seeing the academy, or meeting Captain Navrang in person:
    You MUST say exactly: "My classes end by 12:30. You can set up a meeting with our admissions counselor and mention that you want to discuss your roadmap with Captain Navrang. Should I ask them to get in touch with you?"
 
-3. STRICT LANGUAGE ADAPTATION:
-   - If the caller speaks in Hindi -> You MUST respond in clear, accessible, polite English. Never respond in Hindi.
+3. STRICT LANGUAGE ADAPTATION & PREFERRED LANGUAGE:
+   - If the caller speaks or prefers Hindi -> You MUST respond in clear, accessible, polite Hindi or natural Hinglish. Speak to callers with a language barrier in their preferred language so they feel fully supported and comfortable. Never force English onto Hindi-speaking callers or parents.
    - If the caller speaks in English -> Respond in fluent, professional English.
    - If the caller speaks in Hinglish -> Adapt and blend natural, conversational Hinglish.
+   - Always match the caller's comfort language. Language should never be a barrier to counseling.
 
 CORE CONVERSATIONAL PRINCIPLES:
-1. Listen to the Query and Answer With Genuine Substance:
-   - Carefully listen to the caller's specific question, terminology, or situation before responding. Never brush past their question.
-   - Start with a brief, natural acknowledgment: "Understood,", "Got your point,", "Sure, let me clarify that,", "Haan bilkul,".
-   - Address their exact inquiry directly, clearly, and thoroughly. If they ask about DGCA exams, A320 Type Rating, NIOS, flying hours, or medicals, give a substantive, factual answer.
-   - DO NOT insert unsolicited academy plugs (e.g. do not volunteer "Captain Navrang conducts simulator sessions at our campus") in the middle of technical explanations. Keep answers objective and informative.
+1. Genuine Human Presence & Active Listening:
+   - Listen attentively to the caller's complete thought before speaking. Never rush or jump in abruptly.
+   - Start naturally with brief, warm conversational markers when appropriate: "Understood,", "Got your point,", "Sure, let me clarify that,", "Haan bilkul,", "Right, so...".
+   - Speak like an experienced, warm pilot mentor having a real 1-on-1 phone conversation, not a robotic IVR script.
+   - Address their exact question directly and thoroughly with practical aviation guidance.
+   - DO NOT insert unsolicited marketing pitches or push campus visits during informational Q&A.
 
-2. Two-Sentence Delivery (STRICT SPOKEN BREVITY):
-   - Keep responses strictly to 1 or 2 crisp sentences (under 32 words total). Telephony audio requires tight brevity.
-   - Sentence 1: Direct, substantive expert answer to what they asked.
-   - Sentence 2: A brief, natural check-in ("Does that clarify your doubt?", "Clear hua aapko?") OR a relevant follow-up only if needed.
-   - NEVER exceed 2 sentences. Never give long monologues.
+2. Natural Conversational Delivery (Human-like Spoken Pacing):
+   - Keep responses concise and easy to listen to over the phone (typically 1 to 3 natural spoken sentences, under 45 words).
+   - Talk at a relaxed, calm, measured pace.
+   - AVOID ROBOTIC CLOSING TAGS: Do NOT mechanically repeat "Clear hua aapko?" or "Does that clarify your doubt?" at the end of every response. That sounds like an automated machine.
+   - Instead, let the conversation flow naturally. Only ask a relevant open-ended question when it genuinely helps guide the student's next step.
+   - Avoid long, breathless monologues. Give clear guidance and allow space for the caller to respond.
 
 3. Zero Aggressive Pitching & Zero Premature Booking:
    - NEVER volunteer course fees (e.g. Rs. 2,70,000 or 55-65 Lakhs) unless the caller specifically asks about cost, fees, or pricing.
@@ -783,6 +845,16 @@ async def create_session(
         except Exception as se:
             logger.warning(f"Could not queue inbound lead save: {se}")
 
+    call_active = True
+    state_tracker = {
+        "bot_speaking": False,
+        "user_speaking": False,
+        "first_greeting_done": False,
+        "last_activity": time.monotonic(),
+        "silence_check_count": 0,
+        "preferred_language": "ENGLISH",
+    }
+
     voice_agent = VoiceAgent(
         instructions=session_instructions,
         greeting=session_greeting,
@@ -799,6 +871,9 @@ async def create_session(
         api_key=config.GEMINI_API_KEY,
         model=getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite",
         params=llm_params,
+        customer_phone=customer_phone,
+        preferred_language=state_tracker["preferred_language"],
+        state_tracker=state_tracker,
     )
 
     # 1. Fresh STT FrameProcessor reusing shared in-memory Faster-Whisper model weights
@@ -806,7 +881,7 @@ async def create_session(
         model=getattr(Model, "BASE", "base") if Model else "base",
         device="cpu",
         compute_type="int8",
-        no_speech_prob=0.70,
+        no_speech_prob=0.85,
         language=getattr(Language, "EN", "en") if Language else "en"
     )
     orig_handle_transcription = getattr(stt, "_handle_transcription", None)
@@ -820,17 +895,24 @@ async def create_session(
                         import re
                         normalized_text = re.sub(re.escape(k), v, normalized_text, flags=re.IGNORECASE)
                 logger.info(f"🗣️ Caller Said: '{normalized_text}' (raw: '{text.strip()}')")
+                state_tracker["last_activity"] = time.monotonic()
+                state_tracker["silence_check_count"] = 0
+                import guardrails
+                d_lang, _, _ = guardrails.detect_language_adaptation(normalized_text, phone=customer_phone)
+                if d_lang in ("HINDI", "HINGLISH"):
+                    state_tracker["preferred_language"] = "HINDI"
                 return await orig_handle_transcription(normalized_text, is_final, language)
             return await orig_handle_transcription(text, is_final, language)
         stt._handle_transcription = logged_handle_transcription
 
     # 2. Fresh VAD analyzer instance per call (never reused to avoid cancellation freeze)
-    # Tuned to capture normal conversational mobile telephone loudness without dropping quiet speech
+    # Tuned for natural human telephone conversation:
+    # stop_secs=1.1 allows the caller to pause, breathe, or think without being cut off mid-sentence.
     vad_params = VADParams(
-        start_secs=0.15,
-        stop_secs=0.55,
-        confidence=0.55,
-        min_volume=0.15
+        start_secs=getattr(config, "VAD_START_SECS", 0.25),
+        stop_secs=getattr(config, "VAD_STOP_SECS", 1.1),
+        confidence=getattr(config, "VAD_CONFIDENCE", 0.65),
+        min_volume=getattr(config, "VAD_MIN_VOLUME", 0.35)
     ) if VADParams else None
     vad = SileroVADAnalyzer(params=vad_params) if vad_params else SileroVADAnalyzer()
 
@@ -864,11 +946,80 @@ async def create_session(
         vad=vad,
         telecmi_params=telecmi_params,
         allow_interruptions=True,
-        interruption_strategy=GraceWindowInterruptionStrategy(grace_secs=BARGE_IN_GRACE_SECS),
+        interruption_strategy=GraceWindowInterruptionStrategy(grace_secs=BARGE_IN_GRACE_SECS, state_tracker=state_tracker),
     )
 
-    logger.info("VoiceAgent pipeline active. Tuned 500ms turn latency & real-time interruption pause armed!")
-    await voice_agent.start()
+    logger.info("VoiceAgent pipeline active. Tuned turn latency, interruption pause & silence confirmation watchdog armed!")
+
+    async def silence_watchdog():
+        # Wait for the initial greeting to complete
+        while call_active and not state_tracker["first_greeting_done"]:
+            await asyncio.sleep(0.5)
+
+        first_silence_timeout = float(os.getenv("SILENCE_FIRST_TIMEOUT_SECS", "7.0"))
+        second_silence_timeout = float(os.getenv("SILENCE_SECOND_TIMEOUT_SECS", "8.0"))
+
+        while call_active:
+            await asyncio.sleep(1.0)
+            now = time.monotonic()
+            silence_duration = now - state_tracker["last_activity"]
+
+            # Only check if both bot and user are NOT speaking and first greeting was spoken
+            if (
+                not state_tracker["bot_speaking"]
+                and not state_tracker["user_speaking"]
+                and state_tracker["first_greeting_done"]
+            ):
+                if state_tracker["silence_check_count"] == 0 and silence_duration >= first_silence_timeout:
+                    # User went silent in the middle (first confirmation)
+                    state_tracker["silence_check_count"] = 1
+                    state_tracker["last_activity"] = time.monotonic()
+                    is_hindi = state_tracker["preferred_language"] == "HINDI"
+                    nudge_msg = (
+                        "Kya aap mujhe sun pa rahe hain? Batayein, main aapki kaise madad kar sakta hoon?"
+                        if is_hindi else
+                        "Are you there? Can you hear me?"
+                    )
+                    logger.info(f"⏳ Silence watchdog: caller silent for {silence_duration:.1f}s. Sending confirmation prompt: '{nudge_msg}'")
+                    try:
+                        if voice_agent and voice_agent._task:
+                            await voice_agent._task.queue_frame(TTSSpeakFrame(nudge_msg))
+                    except Exception as qe:
+                        logger.warning(f"Could not queue silence confirmation frame: {qe}")
+
+                elif state_tracker["silence_check_count"] == 1 and silence_duration >= second_silence_timeout:
+                    # Persistent silence after check-in -> polite wrap-up
+                    state_tracker["silence_check_count"] = 2
+                    is_hindi = state_tracker["preferred_language"] == "HINDI"
+                    farewell_msg = (
+                        "Lagta hai audio connection mein issue hai. Main WhatsApp par saari details bhej deta hoon. Have a great day!"
+                        if is_hindi else
+                        "It seems there is an audio connection issue. I will have our pilot counselor send all program details to your WhatsApp. Have a great day!"
+                    )
+                    logger.info(f"⏳ Silence watchdog: persistent silence ({silence_duration:.1f}s). Delivering farewell: '{farewell_msg}'")
+                    try:
+                        if voice_agent and voice_agent._task:
+                            await voice_agent._task.queue_frame(TTSSpeakFrame(farewell_msg))
+                    except Exception as qe:
+                        logger.warning(f"Could not queue silence farewell frame: {qe}")
+                    await asyncio.sleep(4.0)
+                    try:
+                        if voice_agent and voice_agent._task:
+                            await voice_agent._task.cancel()
+                    except Exception:
+                        pass
+                    break
+
+    watchdog_task = asyncio.create_task(silence_watchdog())
+    try:
+        await voice_agent.start()
+    finally:
+        call_active = False
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except asyncio.CancelledError:
+            pass
     logger.info(f"Call session finished for call_id={call_id}")
     try:
         import telephony
@@ -1164,8 +1315,8 @@ async def run_worker(terminate_stale: bool = False):
             print("==================================================================")
             print("Airborne Aviation AI Agent Worker is ONLINE and SUB-SECOND TUNED!")
             print(f"Active Agent ID: {AGENT_ID}")
-            print("VAD Silence Window: 400ms (snappy turn-taking)")
-            print("Voice Engine: ElevenLabs Flash Streaming Neural (Persistent keep-alive)")
+            print(f"VAD Silence Window: {getattr(config, 'VAD_STOP_SECS', 1.1):.1f}s (natural human conversational breathing)")
+            print(f"Voice Engine: ElevenLabs (speed={getattr(config, 'ELEVENLABS_VOICE_SPEED', 0.88):.2f}, stability={getattr(config, 'ELEVENLABS_STABILITY', 0.48):.2f})")
             print("STT: Faster-Whisper Base (8 CPU threads + greedy single-pass decode)")
             print("LLM: Gemini 3.1 Flash-Lite (thinking_budget=0, sub-second TTFT)")
             print("Expected Total Turn-Around Latency: ~1.5 - 2.0 seconds")

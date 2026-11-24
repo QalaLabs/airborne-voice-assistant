@@ -1114,11 +1114,11 @@ async def answer_call(
 
         method="POST",
 
-        max_length=15,
+        max_length=30,
 
         play_beep=False,
 
-        timeout=3
+        timeout=4
 
     )
 
@@ -1186,11 +1186,11 @@ def process_recording(
 
             method="POST",
 
-            max_length=15,
+            max_length=30,
 
             play_beep=False,
 
-            timeout=3
+            timeout=4
 
         )
 
