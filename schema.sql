@@ -213,3 +213,52 @@ CREATE INDEX IF NOT EXISTS calling_jobs_queue_drain_idx ON calling_jobs("orgId",
 CREATE INDEX IF NOT EXISTS calling_jobs_lead_idx ON calling_jobs("leadId");
 CREATE INDEX IF NOT EXISTS calling_jobs_provider_call_id_idx ON calling_jobs("providerCallId");
 CREATE INDEX IF NOT EXISTS calling_jobs_retry_idx ON calling_jobs(status, "nextAttemptAt");
+
+-- =========================================================
+-- Agent Multi-Signal Critic & Continuous Learning Tables
+-- =========================================================
+CREATE TABLE IF NOT EXISTS agent_eval_metrics (
+    id SERIAL PRIMARY KEY,
+    call_id VARCHAR(255) UNIQUE,
+    customer_phone VARCHAR(50),
+    direction VARCHAR(20),
+    caller_sentiment_score FLOAT,
+    friction_detected BOOLEAN,
+    friction_type VARCHAR(100),
+    factual_accuracy_score FLOAT,
+    compliance_passed BOOLEAN,
+    total_turns INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS agent_issues (
+    id SERIAL PRIMARY KEY,
+    call_id VARCHAR(255),
+    customer_phone VARCHAR(50),
+    direction VARCHAR(20),
+    mistake_category VARCHAR(100),
+    severity VARCHAR(50),
+    turn_index INTEGER,
+    caller_utterance TEXT,
+    agent_response TEXT,
+    critic_reasoning TEXT,
+    suggested_correction TEXT,
+    proposed_negative_constraint TEXT,
+    status VARCHAR(50) DEFAULT 'PENDING_REVIEW',
+    reviewer_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS agent_lessons (
+    id SERIAL PRIMARY KEY,
+    source_issue_id INTEGER REFERENCES agent_issues(id) ON DELETE SET NULL,
+    topic_tag VARCHAR(100),
+    rule_instruction TEXT,
+    negative_constraint TEXT,
+    priority_score INTEGER DEFAULT 5,
+    is_active BOOLEAN DEFAULT TRUE,
+    verified_by VARCHAR(100) DEFAULT 'PENDING_REVIEW',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+

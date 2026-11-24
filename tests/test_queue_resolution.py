@@ -33,6 +33,7 @@ class QueueResolutionTests(unittest.TestCase):
 
         telephony.cancel_all_watchers()
         telephony.release_active_call(self.PHONE)
+        telephony.clear_cooldowns()
         precall_manager.manager.register_precall(phone=self.PHONE, name="Test Candidate", prewarm_audio=False)
 
     def tearDown(self):

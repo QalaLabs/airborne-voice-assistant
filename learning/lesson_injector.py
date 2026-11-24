@@ -40,6 +40,7 @@ def fetch_active_lessons_from_db(limit: int = 5) -> List[Dict[str, Any]]:
     """
     Retrieves the highest priority active lessons from agent_lessons table.
     """
+    conn = None
     try:
         conn = database.get_connection()
         if not conn:
@@ -67,6 +68,9 @@ def fetch_active_lessons_from_db(limit: int = 5) -> List[Dict[str, Any]]:
     except Exception as e:
         # Fallback to cache without failing the live call
         print(f"[LESSON_INJECTOR] DB fetch warning ({e}). Using cached lessons.")
+    finally:
+        if conn:
+            conn.close()
 
     return _CACHE_LESSONS[:limit]
 

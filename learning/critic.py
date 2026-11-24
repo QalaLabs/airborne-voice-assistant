@@ -188,6 +188,7 @@ def run_multi_signal_audit(
     return {"status": "PASSED_CLEAN"}
 
 def persist_eval_results(call_id, phone, direction, sentiment, friction_detected, friction_type, accuracy, compliance_passed, total_turns):
+    conn = None
     try:
         conn = database.get_connection()
         if not conn:
@@ -206,9 +207,13 @@ def persist_eval_results(call_id, phone, direction, sentiment, friction_detected
             conn.commit()
     except Exception as e:
         logger.warning(f"Could not persist agent_eval_metrics: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def persist_agent_issue(call_id, phone, direction, category, severity, turn_index, caller_utterance, agent_response, reasoning, correction, negative_constraint, status):
     issue_id = None
+    conn = None
     try:
         conn = database.get_connection()
         if not conn:
@@ -233,6 +238,9 @@ def persist_agent_issue(call_id, phone, direction, category, severity, turn_inde
             conn.commit()
     except Exception as e:
         logger.warning(f"Could not persist agent_issues: {e}")
+    finally:
+        if conn:
+            conn.close()
     return issue_id
 
 async def enqueue_post_call_critique(customer_phone: str, call_history: list, direction: str = "INBOUND", call_id: str = None):

@@ -50,8 +50,8 @@ def get_pool():
         try:
             dsn = _format_dsn(DATABASE_URL, timeout_secs=2)
             _pool = ThreadedConnectionPool(
-                minconn=1,
-                maxconn=10,
+                minconn=2,
+                maxconn=30,
                 dsn=dsn,
                 cursor_factory=RealDictCursor
             )
@@ -115,7 +115,11 @@ def get_connection():
         conn.autocommit = True
         return conn
     except Exception as e:
-        _trip_circuit(f"Direct connection failed: {e}")
+        # Only trip circuit if the pool was also unavailable (prevent transient checkout spikes from killing pool)
+        if pool is None:
+            _trip_circuit(f"Direct connection failed: {e}")
+        else:
+            print(f"Database Direct Fallback Failed (pool preserved): {e}")
         return None
 
 def init_db():
@@ -182,6 +186,63 @@ def init_db():
                         "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     );
                     DO $$ BEGIN ALTER TYPE "LeadSource" ADD VALUE IF NOT EXISTS 'VOICE_AGENT'; EXCEPTION WHEN undefined_object THEN NULL; END $$;
+
+                    -- Agent critique, quality metrics, and continuous learning tables
+                    CREATE TABLE IF NOT EXISTS agent_eval_metrics (
+                        id SERIAL PRIMARY KEY,
+                        call_id VARCHAR(255) UNIQUE,
+                        customer_phone VARCHAR(50),
+                        direction VARCHAR(20),
+                        caller_sentiment_score FLOAT,
+                        friction_detected BOOLEAN,
+                        friction_type VARCHAR(100),
+                        factual_accuracy_score FLOAT,
+                        compliance_passed BOOLEAN,
+                        total_turns INTEGER,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE IF NOT EXISTS agent_issues (
+                        id SERIAL PRIMARY KEY,
+                        call_id VARCHAR(255),
+                        customer_phone VARCHAR(50),
+                        direction VARCHAR(20),
+                        mistake_category VARCHAR(100),
+                        severity VARCHAR(50),
+                        turn_index INTEGER,
+                        caller_utterance TEXT,
+                        agent_response TEXT,
+                        critic_reasoning TEXT,
+                        suggested_correction TEXT,
+                        proposed_negative_constraint TEXT,
+                        status VARCHAR(50) DEFAULT 'PENDING_REVIEW',
+                        reviewer_notes TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE IF NOT EXISTS agent_lessons (
+                        id SERIAL PRIMARY KEY,
+                        source_issue_id INTEGER REFERENCES agent_issues(id) ON DELETE SET NULL,
+                        topic_tag VARCHAR(100),
+                        rule_instruction TEXT,
+                        negative_constraint TEXT,
+                        priority_score INTEGER DEFAULT 5,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        verified_by VARCHAR(100) DEFAULT 'PENDING_REVIEW',
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    -- Fix legacy voice_calls constraint if referencing obsolete voice_leads
+                    DO $$ BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.table_constraints 
+                            WHERE constraint_name = 'voice_calls_lead_id_fkey'
+                        ) THEN
+                            ALTER TABLE voice_calls DROP CONSTRAINT voice_calls_lead_id_fkey;
+                        END IF;
+                    EXCEPTION WHEN OTHERS THEN NULL;
+                    END $$;
                 """
                 try:
                     cur.execute(migration_sql)
@@ -353,11 +414,21 @@ def save_lead(
 
     try:
         cleaned_phone = clean_phone_number(phone)
+        raw_digits = re.sub(r"\D", "", phone or "")
+        last10 = raw_digits[-10:] if len(raw_digits) >= 10 else (raw_digits or "0000000000")
         custom_fields_json = json.dumps(custom_fields or {})
         with conn.cursor() as cur:
             org_id = get_default_org_id(cur)
-            # Check existing lead in CRM leads table
-            cur.execute('SELECT id, "courseInterest", status, metadata, "customFields" FROM leads WHERE phone = %s OR phone = %s;', (phone, cleaned_phone))
+            # Check existing lead in CRM leads table matching exact phone or last 10 digits
+            cur.execute("""
+                SELECT id, "courseInterest", status, metadata, "customFields" 
+                FROM leads 
+                WHERE phone = %s 
+                   OR phone = %s 
+                   OR ("right"(regexp_replace(phone::text, '\\D'::text, ''::text, 'g'::text), 10) = %s)
+                ORDER BY "updatedAt" DESC
+                LIMIT 1;
+            """, (phone, cleaned_phone, last10))
             existing = cur.fetchone()
 
             if existing:
@@ -378,34 +449,67 @@ def save_lead(
                 updated = cur.fetchone()
                 return dict(updated) if updated else dict(existing)
             else:
-                cur.execute("""
-                    INSERT INTO leads (
-                        id, "orgId", name, phone, email, city, "courseInterest", status, source, 
-                        "customFields", metadata, "lastActivityAt", "createdAt", "updatedAt"
-                    )
-                    VALUES (
-                        gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, 
-                        %s::jsonb, %s::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    RETURNING *;
-                """, (
-                    org_id, name or "New Lead", cleaned_phone, email, city, course, 
-                    clean_status, clean_source, custom_fields_json, custom_fields_json
-                ))
-                inserted = cur.fetchone()
-                lead_id = inserted["id"] if inserted else None
-
-                # Log initial note activity if provided
-                if lead_id and notes:
+                try:
                     cur.execute("""
-                        INSERT INTO lead_activities (
-                            id, "leadId", "orgId", "activityType", title, notes, outcome, "createdAt"
-                        ) VALUES (
-                            gen_random_uuid(), %s, %s, 'NOTE', 'Initial Lead Intake Note', %s, 'RECORDED', CURRENT_TIMESTAMP
-                        );
-                    """, (lead_id, org_id, notes))
+                        INSERT INTO leads (
+                            id, "orgId", name, phone, email, city, "courseInterest", status, source, 
+                            "customFields", metadata, "lastActivityAt", "createdAt", "updatedAt"
+                        )
+                        VALUES (
+                            gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, 
+                            %s::jsonb, %s::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        RETURNING *;
+                    """, (
+                        org_id, name or "New Lead", cleaned_phone, email, city, course, 
+                        clean_status, clean_source, custom_fields_json, custom_fields_json
+                    ))
+                    inserted = cur.fetchone()
+                    lead_id = inserted["id"] if inserted else None
 
-                return dict(inserted) if inserted else None
+                    # Log initial note activity if provided
+                    if lead_id and notes:
+                        cur.execute("""
+                            INSERT INTO lead_activities (
+                                id, "leadId", "orgId", "activityType", title, notes, outcome, "createdAt"
+                            ) VALUES (
+                                gen_random_uuid(), %s, %s, 'NOTE', 'Initial Lead Intake Note', %s, 'RECORDED', CURRENT_TIMESTAMP
+                            );
+                        """, (lead_id, org_id, notes))
+
+                    return dict(inserted) if inserted else None
+                except Exception as insert_err:
+                    # Gracefully handle unique constraint conflict (idx_leads_unique_org_last10)
+                    err_msg = str(insert_err).lower()
+                    if "unique constraint" in err_msg or "duplicate key" in err_msg or "idx_leads" in err_msg:
+                        cur.execute("""
+                            SELECT id, "courseInterest", status, metadata, "customFields" 
+                            FROM leads 
+                            WHERE phone = %s 
+                               OR phone = %s 
+                               OR ("right"(regexp_replace(phone::text, '\\D'::text, ''::text, 'g'::text), 10) = %s)
+                            ORDER BY "updatedAt" DESC
+                            LIMIT 1;
+                        """, (phone, cleaned_phone, last10))
+                        conflict_row = cur.fetchone()
+                        if conflict_row:
+                            lead_id = conflict_row["id"]
+                            cur.execute("""
+                                UPDATE leads 
+                                SET name = COALESCE(%s, name),
+                                    email = COALESCE(%s, email),
+                                    city = COALESCE(%s, city),
+                                    "courseInterest" = COALESCE(%s, "courseInterest"),
+                                    "customFields" = COALESCE("customFields", '{}'::jsonb) || %s::jsonb,
+                                    metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                                    "lastActivityAt" = CURRENT_TIMESTAMP,
+                                    "updatedAt" = CURRENT_TIMESTAMP
+                                WHERE id = %s
+                                RETURNING *;
+                            """, (name, email, city, course, custom_fields_json, custom_fields_json, lead_id))
+                            updated = cur.fetchone()
+                            return dict(updated) if updated else dict(conflict_row)
+                    raise insert_err
     except Exception as e:
         print(f"DB Error (save_lead): {e}")
         return None
@@ -1221,7 +1325,15 @@ def record_call_outcome(
                         VALUES (%s, %s, %s, %s, %s, %s);
                     """, (lead_id, direction, duration, recording_url, transcript, summary))
                 except Exception as tbl_err:
-                    print(f"DB Notice (record_call_outcome): failed to insert into '{tbl}': {tbl_err}")
+                    # If foreign key fails on legacy voice_leads, fallback to inserting with lead_id = None
+                    try:
+                        cur.execute(f"""
+                            INSERT INTO {tbl} (lead_id, direction, duration, recording_url, transcript, summary)
+                            VALUES (NULL, %s, %s, %s, %s, %s);
+                        """, (direction, duration, recording_url, transcript, summary))
+                    except Exception:
+                        pass
+                    print(f"DB Notice (record_call_outcome): fallback used for '{tbl}': {tbl_err}")
 
         print(f"CRM Updated via Cloud SQL: lead={phone}, outcome={outcome}, status={new_status}, followUp={next_follow_up}")
     except Exception as e:

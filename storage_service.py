@@ -144,6 +144,10 @@ def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> 
         print(f"Recording URL rejected (not https / not an allowed carrier host / non-public address): {recording_url}")
         return recording_url
 
+    # If already a permanent GCS URL, return as-is
+    if "storage.googleapis.com" in recording_url:
+        return recording_url
+
     import time
     import uuid
     timestamp = int(time.time())
@@ -156,12 +160,31 @@ def upload_call_recording_from_url(recording_url: str, call_identifier: str) -> 
             from urllib.parse import urlparse
             host = (urlparse(recording_url).hostname or "").lower()
             auth = (config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN) if (_host_matches(host, "twilio.com") and config.TWILIO_ACCOUNT_SID) else None
-            resp = requests.get(recording_url, auth=auth, timeout=30, allow_redirects=False)
+
+            # TeleCMI / Piopiy playback endpoints require Bearer auth header
+            headers = {}
+            if _host_matches(host, "piopiy.com") or _host_matches(host, "telecmi.com") or _host_matches(host, "piopiy.io"):
+                bearer_token = (
+                    getattr(config, "AGENT_TOKEN", None)
+                    or getattr(config, "TELECMI_TOKEN", None)
+                    or getattr(config, "TELECMI_APP_SECRET", None)
+                    or os.environ.get("AGENT_TOKEN")
+                    or os.environ.get("TELECMI_TOKEN")
+                )
+                if bearer_token:
+                    headers["Authorization"] = f"Bearer {bearer_token}"
+
+            resp = requests.get(recording_url, headers=headers, auth=auth, timeout=30, allow_redirects=False)
             if resp.is_redirect:
                 target = requests.compat.urljoin(recording_url, resp.headers.get("Location", ""))
                 if not is_safe_recording_url(target):
                     raise ValueError(f"redirect to disallowed URL {target}")
-                resp = requests.get(target, timeout=30, allow_redirects=False)
+                target_host = (urlparse(target).hostname or "").lower()
+                target_headers = {}
+                if _host_matches(target_host, "piopiy.com") or _host_matches(target_host, "telecmi.com") or _host_matches(target_host, "piopiy.io"):
+                    if bearer_token:
+                        target_headers["Authorization"] = f"Bearer {bearer_token}"
+                resp = requests.get(target, headers=target_headers, timeout=30, allow_redirects=False)
             resp.raise_for_status()
             
             bucket = client.bucket(GCS_BUCKET_NAME)

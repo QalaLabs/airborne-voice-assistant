@@ -1528,6 +1528,36 @@ async def telecmi_answer(request: Request, background_tasks: BackgroundTasks):
 
 
 
+def extract_recording_url(payload: dict) -> str:
+    """
+    Extracts audio recording URL from carrier webhook payloads (TeleCMI, Piopiy, Twilio).
+    Handles both flat and nested payload schemas:
+    - payload["recording"]["file_url"]
+    - payload["recording"]["record_url"]
+    - payload["record_url"]
+    - payload["recording_url"]
+    - payload["file_url"]
+    - payload["recording_file"]
+    """
+    if not isinstance(payload, dict):
+        return ""
+    rec = payload.get("recording")
+    if isinstance(rec, dict):
+        url = rec.get("file_url") or rec.get("record_url") or rec.get("url") or rec.get("recording_url") or ""
+        if url:
+            return str(url).strip()
+    elif isinstance(rec, str) and rec.strip():
+        return rec.strip()
+    url = (
+        payload.get("record_url")
+        or payload.get("recording_url")
+        or payload.get("file_url")
+        or payload.get("recording_file")
+        or payload.get("audio_url")
+        or ""
+    )
+    return str(url).strip()
+
 @app.get("/telecmi/process-recording", operation_id="telecmi_process_recording_get")
 
 @app.post("/telecmi/process-recording", operation_id="telecmi_process_recording_post")
@@ -1626,17 +1656,7 @@ async def telecmi_process_recording(request: Request, background_tasks: Backgrou
 
             caller_speech = str(raw_speech)
 
-        recording_url = (
-
-            data.get("record_url") or 
-
-            data.get("recording_url") or 
-
-            data.get("file_url") or 
-
-            ""
-
-        )
+        recording_url = extract_recording_url(data)
 
 
 
@@ -1812,7 +1832,7 @@ async def telecmi_events(request: Request, background_tasks: BackgroundTasks):
 
         provider_call_id = str(data.get("call_id") or data.get("request_id") or data.get("uuid") or data.get("call_uuid") or "")
 
-        recording_url = data.get("record_url") or data.get("recording_url") or data.get("file_url") or ""
+        recording_url = extract_recording_url(data)
 
         duration = int(data.get("duration") or data.get("billsec") or 0)
 
